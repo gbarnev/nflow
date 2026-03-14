@@ -317,6 +317,51 @@ class TestExtractFlags:
         assert flags["passthrough"] is True
         assert flags["onError"] == "continue"
 
+    def test_execute_once(self):
+        rest, flags = extract_flags('HTTP GET url +once')
+        assert flags["executeOnce"] is True
+        assert "+once" not in rest
+
+    def test_always_output_data(self):
+        rest, flags = extract_flags('SET "X" +always')
+        assert flags["alwaysOutputData"] is True
+        assert "+always" not in rest
+
+    def test_retry_on_fail_flag(self):
+        rest, flags = extract_flags('HTTP GET url +retry')
+        assert flags["retryOnFail"] is True
+        assert "+retry" not in rest
+
+    def test_retry_with_max_tries(self):
+        rest, flags = extract_flags('HTTP GET url retry:5')
+        assert flags["retryOnFail"] is True
+        assert flags["maxTries"] == 5
+        assert "retry:" not in rest
+
+    def test_wait_between_tries(self):
+        rest, flags = extract_flags('HTTP GET url +retry wait:2000')
+        assert flags["retryOnFail"] is True
+        assert flags["waitBetweenTries"] == 2000
+
+    def test_notes_double_quotes(self):
+        rest, flags = extract_flags('HTTP GET url notes:"Check auth first"')
+        assert flags["notes"] == "Check auth first"
+        assert "notes:" not in rest
+
+    def test_notes_single_quotes(self):
+        rest, flags = extract_flags("HTTP GET url notes:'My note'")
+        assert flags["notes"] == "My note"
+
+    def test_all_settings_combined(self):
+        rest, flags = extract_flags(
+            'HTTP GET url +once +always +retry onError:continue notes:"test"'
+        )
+        assert flags["executeOnce"] is True
+        assert flags["alwaysOutputData"] is True
+        assert flags["retryOnFail"] is True
+        assert flags["onError"] == "continue"
+        assert flags["notes"] == "test"
+
 
 # =========================================================================
 # Condition parsing
@@ -435,6 +480,54 @@ class TestNode:
         node = Node("Test", "n8n-nodes-base.set", {}, flags={"disabled": True})
         d = node.to_dict()
         assert d["disabled"] is True
+
+    def test_to_dict_onerror_output(self):
+        node = Node("Test", "n8n-nodes-base.httpRequest", {}, flags={"onError": "output"})
+        d = node.to_dict()
+        assert d["onError"] == "continueRegularOutput"
+
+    def test_to_dict_onerror_stop(self):
+        node = Node("Test", "n8n-nodes-base.httpRequest", {}, flags={"onError": "stop"})
+        d = node.to_dict()
+        assert d["onError"] == "stopWorkflow"
+
+    def test_to_dict_execute_once(self):
+        node = Node("Test", "n8n-nodes-base.httpRequest", {}, flags={"executeOnce": True})
+        d = node.to_dict()
+        assert d["executeOnce"] is True
+
+    def test_to_dict_always_output_data(self):
+        node = Node("Test", "n8n-nodes-base.httpRequest", {}, flags={"alwaysOutputData": True})
+        d = node.to_dict()
+        assert d["alwaysOutputData"] is True
+
+    def test_to_dict_retry_on_fail(self):
+        node = Node("Test", "n8n-nodes-base.httpRequest", {},
+                     flags={"retryOnFail": True, "maxTries": 5, "waitBetweenTries": 2000})
+        d = node.to_dict()
+        assert d["retryOnFail"] is True
+        assert d["maxTries"] == 5
+        assert d["waitBetweenTries"] == 2000
+
+    def test_to_dict_retry_no_extras(self):
+        node = Node("Test", "n8n-nodes-base.httpRequest", {}, flags={"retryOnFail": True})
+        d = node.to_dict()
+        assert d["retryOnFail"] is True
+        assert "maxTries" not in d
+        assert "waitBetweenTries" not in d
+
+    def test_to_dict_notes(self):
+        node = Node("Test", "n8n-nodes-base.httpRequest", {},
+                     flags={"notes": "Remember to check auth"})
+        d = node.to_dict()
+        assert d["notes"] == "Remember to check auth"
+        assert d["notesInFlow"] is True
+
+    def test_to_dict_no_notes_key_without_flag(self):
+        node = Node("Test", "n8n-nodes-base.httpRequest", {})
+        d = node.to_dict()
+        assert "notes" not in d
+        assert "notesInFlow" not in d
 
     def test_default_version(self):
         node = Node("T", "n8n-nodes-base.httpRequest", {})

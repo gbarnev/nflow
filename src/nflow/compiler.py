@@ -345,17 +345,41 @@ def extract_as_name(prefix: str) -> tuple[str, str]:
 
 
 def extract_flags(prefix: str) -> tuple[str, dict]:
-    """Extract known flags like +passthrough, onError:continue, disabled."""
+    """Extract known flags like +passthrough, +once, +always, +retry,
+    onError:X, retry:N, wait:N, notes:"...", disabled."""
     flags = {}
     if '+passthrough' in prefix:
         flags['passthrough'] = True
         prefix = prefix.replace('+passthrough', '').strip()
+    for flag_name, flag_key in (('+once', 'executeOnce'), ('+always', 'alwaysOutputData'),
+                                 ('+retry', 'retryOnFail')):
+        if flag_name in prefix:
+            flags[flag_key] = True
+            prefix = prefix.replace(flag_name, '', 1).strip()
     if 'disabled' in prefix.split():
         flags['disabled'] = True
         prefix = re.sub(r'\bdisabled\b', '', prefix).strip()
     m = re.search(r'onError:(\w+)', prefix)
     if m:
         flags['onError'] = m.group(1)
+        prefix = prefix[:m.start()].strip() + ' ' + prefix[m.end():].strip()
+        prefix = prefix.strip()
+    m = re.search(r'retry:(\d+)', prefix)
+    if m:
+        flags['retryOnFail'] = True
+        flags['maxTries'] = int(m.group(1))
+        prefix = prefix[:m.start()].strip() + ' ' + prefix[m.end():].strip()
+        prefix = prefix.strip()
+    m = re.search(r'wait:(\d+)', prefix)
+    if m:
+        flags['waitBetweenTries'] = int(m.group(1))
+        prefix = prefix[:m.start()].strip() + ' ' + prefix[m.end():].strip()
+        prefix = prefix.strip()
+    m = re.search(r'notes:"([^"]*)"', prefix)
+    if not m:
+        m = re.search(r"notes:'([^']*)'", prefix)
+    if m:
+        flags['notes'] = m.group(1)
         prefix = prefix[:m.start()].strip() + ' ' + prefix[m.end():].strip()
         prefix = prefix.strip()
     return prefix, flags
@@ -501,9 +525,23 @@ class Node:
             d['credentials'] = self.credentials
         if self.flags.get('onError'):
             onerr = self.flags['onError']
-            d['onError'] = 'continueErrorOutput' if onerr == 'continue' else onerr
+            onerr_map = {'continue': 'continueErrorOutput',
+                         'output': 'continueRegularOutput',
+                         'stop': 'stopWorkflow'}
+            d['onError'] = onerr_map.get(onerr, onerr)
         if self.flags.get('executeOnce'):
             d['executeOnce'] = True
+        if self.flags.get('alwaysOutputData'):
+            d['alwaysOutputData'] = True
+        if self.flags.get('retryOnFail'):
+            d['retryOnFail'] = True
+            if 'maxTries' in self.flags:
+                d['maxTries'] = self.flags['maxTries']
+            if 'waitBetweenTries' in self.flags:
+                d['waitBetweenTries'] = self.flags['waitBetweenTries']
+        if 'notes' in self.flags:
+            d['notes'] = self.flags['notes']
+            d['notesInFlow'] = True
         if self.flags.get('disabled'):
             d['disabled'] = True
         return d

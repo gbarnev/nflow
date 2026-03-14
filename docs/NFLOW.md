@@ -320,7 +320,49 @@ Shorthand keys like `systemMessage` (AGENT), `temperature` (LLM), and `title`/`s
 
 ---
 
-## 5. Layout (optional)
+## 5. Node Settings
+
+Any node can carry inline settings that control n8n execution behavior. Boolean settings use a `+` prefix; value settings use `key:value` or `key:"value"` syntax.
+
+```nflow
+// Execute once, always output data, retry on fail
+HTTP POST https://api.example.com @myapi AS "Create" +once +always +retry {
+  body: { name: "test" }
+}
+
+// Retry with explicit max-tries and wait
+HTTP GET https://api.example.com @myapi AS "Fetch" retry:5 wait:2000
+
+// Error handling variants
+HTTP GET https://api.example.com AS "Safe Call" onError:continue   // → continueErrorOutput
+HTTP GET https://api.example.com AS "Keep Going" onError:output    // → continueRegularOutput
+HTTP GET https://api.example.com AS "Strict" onError:stop          // → stopWorkflow
+
+// Inline notes (displayed on the canvas)
+CODE "Transform" +once notes:"Normalize upstream payload" `return $input.all();`
+
+// Combine everything
+HTTP POST https://api.example.com @myapi AS "Critical" +once +always retry:3 wait:1000 onError:continue notes:"Auth required" {
+  jsonBody: {{ JSON.stringify($json) }}
+}
+```
+
+| Setting | Syntax | n8n JSON output |
+|---|---|---|
+| Execute once | `+once` | `executeOnce: true` |
+| Always output data | `+always` | `alwaysOutputData: true` |
+| Retry on fail | `+retry` | `retryOnFail: true` |
+| Retry with max tries | `retry:N` | `retryOnFail: true, maxTries: N` |
+| Wait between retries | `wait:N` | `waitBetweenTries: N` (ms) |
+| Error → error output | `onError:continue` | `onError: "continueErrorOutput"` |
+| Error → regular output | `onError:output` | `onError: "continueRegularOutput"` |
+| Error → stop workflow | `onError:stop` | `onError: "stopWorkflow"` |
+| Inline notes | `notes:"text"` | `notes: "text", notesInFlow: true` |
+| Disable node | `disabled` | `disabled: true` |
+
+---
+
+## 6. Layout (optional)
 
 ```nflow
 POSITION "Node Name" (100, 200)
@@ -330,7 +372,7 @@ Auto-calculated if omitted.
 
 ---
 
-## 6. Comments
+## 7. Comments
 
 ```nflow
 // Single-line comments anywhere
@@ -369,8 +411,15 @@ Auto-calculated if omitted.
 | `-> OK/ERR ->` | `"Http" -> ERR -> "B"` | Error routing |
 | `-> LLM/TOOL/MEMORY ->` | `"Gemini" -> LLM -> "Agent"` | AI connection |
 | `"Node":N` | `"A" -> "Merge":1` | Target input slot |
+| **Node Settings** | | |
+| `+once` | `HTTP GET url +once` | Execute once per run |
+| `+always` | `SET "X" +always { ... }` | Always output data |
+| `+retry` / `retry:N` | `HTTP GET url +retry` or `retry:5` | Retry on fail (optional max tries) |
+| `wait:N` | `HTTP GET url retry:3 wait:2000` | Wait between retries (ms) |
+| `onError:X` | `onError:continue` / `output` / `stop` | Error handling mode |
+| `notes:"…"` | `notes:"Check auth"` | Inline note (shown on canvas) |
+| `disabled` | `LLM openai AS "X" disabled { ... }` | Disable a node |
 | **Other** | | |
 | `options` | `options: { key: val }` | n8n node options (any node) |
 | `{{ expr }}` | `{{ $json.field }}` | n8n expression |
 | `//` | `// comment` | Comment |
-| `disabled` | `LLM openai AS "X" disabled { ... }` | Disable a node |
