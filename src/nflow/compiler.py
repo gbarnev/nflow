@@ -488,7 +488,7 @@ def parse_conditions_block(block: dict) -> dict:
         return {
             'conditions': {
                 'options': {
-                    'caseSensitive': True,
+                    'caseSensitive': False,
                     'leftValue': '',
                     'typeValidation': 'strict',
                     'version': 3
@@ -562,13 +562,18 @@ class Node:
             'n8n-nodes-base.if': 2.3,
             'n8n-nodes-base.filter': 2.3,
             'n8n-nodes-base.merge': 3.2,
+            'n8n-nodes-base.switch': 3.4,
+            'n8n-nodes-base.dateTime': 2,
+            'n8n-nodes-base.limit': 1,
+            'n8n-nodes-base.splitInBatches': 3,
+            'n8n-nodes-base.formTrigger': 2.5,
             'n8n-nodes-base.googleSheets': 4.5,
             'n8n-nodes-base.googleSheetsTrigger': 1,
             'n8n-nodes-base.googleDrive': 3,
             'n8n-nodes-base.noOp': 1,
             'n8n-nodes-base.stickyNote': 1,
             'n8n-nodes-base.manualTrigger': 1,
-            'n8n-nodes-base.webhook': 1.2,
+            'n8n-nodes-base.webhook': 2.1,
             'n8n-nodes-base.scheduleTrigger': 1.2,
             # AI / LangChain nodes
             '@n8n/n8n-nodes-langchain.agent': 2,
@@ -606,8 +611,8 @@ class Connection:
 
 KNOWN_KEYWORDS = frozenset({
     'WORKFLOW', 'CREDENTIAL', 'TRIGGER', 'SET', 'HTTP', 'CODE',
-    'FILTER', 'IF', 'MERGE', 'GSHEET', 'GDRIVE', 'AGENT', 'LLM',
-    'MEMORY', 'TOOL', 'NOOP', 'NOTE', 'POSITION',
+    'FILTER', 'IF', 'MERGE', 'SWITCH', 'GSHEET', 'GDRIVE', 'AGENT', 'LLM',
+    'MEMORY', 'TOOL', 'NOOP', 'NOTE', 'POSITION', 'DATETIME', 'LIMIT', 'LOOP',
 })
 
 
@@ -722,7 +727,16 @@ class N8nFDLParser:
     def parse_trigger(self, line: str):
         prefix, block_str = extract_block(line)
         prefix, name = extract_as_name(prefix)
+        prefix, flags = extract_flags(prefix)
         block = parse_kv_block(block_str) if block_str else {}
+
+        # Extract credential alias from prefix (e.g. TRIGGER form @cred ...)
+        trig_cred_alias = ''
+        cred_match = re.search(r'@(\w+)', prefix)
+        if cred_match:
+            trig_cred_alias = '@' + cred_match.group(1)
+            prefix = prefix[:cred_match.start()] + prefix[cred_match.end():]
+            prefix = prefix.strip()
 
         # Determine trigger type
         trigger_type = prefix.replace('TRIGGER', '').strip().lower()
@@ -759,12 +773,20 @@ class N8nFDLParser:
         elif trigger_type in ('webhook', 'hook'):
             name = name or 'Webhook'
             params = {
-                'path': block.get('path', '/webhook'),
-                'httpMethod': block.get('method', 'POST'),
+                'httpMethod': block.pop('method', block.pop('httpMethod', 'GET')),
+                'path': block.pop('path', generate_id()),
                 'options': {}
             }
+            # Pass through remaining block params (responseMode, authentication, etc.)
+            for k, v in block.items():
+                if k != 'options' and k not in params:
+                    params[k] = v
             self._apply_options(block, params)
-            node = Node(name, 'n8n-nodes-base.webhook', params)
+            credentials = {}
+            if trig_cred_alias:
+                credentials = self._resolve_credential(trig_cred_alias)
+            node = Node(name, 'n8n-nodes-base.webhook', params,
+                        credentials=credentials, flags=flags)
 
         elif trigger_type in ('cron', 'schedule'):
             name = name or 'Schedule Trigger'
@@ -796,6 +818,21 @@ class N8nFDLParser:
             self._apply_options(block, params)
 
             node = Node(name, '@n8n/n8n-nodes-langchain.chatTrigger', params)
+
+        elif trigger_type == 'form':
+            name = name or 'On form submission'
+            params = {'options': {}}
+            # Pass through all block params (formTitle, formDescription, formFields, authentication, etc.)
+            for k, v in block.items():
+                if k != 'options':
+                    params[k] = v
+            self._apply_options(block, params)
+
+            credentials = {}
+            if trig_cred_alias:
+                credentials = self._resolve_credential(trig_cred_alias)
+            node = Node(name, 'n8n-nodes-base.formTrigger', params,
+                        credentials=credentials, flags=flags)
 
         else:
             name = name or f'Trigger ({trigger_type})'
@@ -967,6 +1004,8 @@ class N8nFDLParser:
         block = parse_kv_block(block_str) if block_str else {}
         params = parse_conditions_block(block)
         self._apply_options(block, params)
+        if 'looseTypeValidation' in block:
+            params['looseTypeValidation'] = block['looseTypeValidation']
 
         node = Node(self._unique_name(name), 'n8n-nodes-base.filter', params)
         self.nodes.append(node)
@@ -979,6 +1018,8 @@ class N8nFDLParser:
         block = parse_kv_block(block_str) if block_str else {}
         params = parse_conditions_block(block)
         self._apply_options(block, params)
+        if 'looseTypeValidation' in block:
+            params['looseTypeValidation'] = block['looseTypeValidation']
 
         node = Node(self._unique_name(name), 'n8n-nodes-base.if', params)
         self.nodes.append(node)
@@ -1360,6 +1401,132 @@ class N8nFDLParser:
         node = Node(self._unique_name(name), 'n8n-nodes-base.stickyNote', params)
         self.nodes.append(node)
 
+    def parse_datetime(self, line: str):
+        """Parse: DATETIME "Name" { operation: extractDate, part: week, ... }"""
+        prefix, block_str = extract_block(line)
+        prefix, name = extract_as_name(prefix)
+        prefix, flags = extract_flags(prefix)
+        if not name:
+            m = re.match(r'DATETIME\s+' + QUOTED_NAME, prefix)
+            name = unquote_name(m.group(1)) if m else 'Date & Time'
+        block = parse_kv_block(block_str) if block_str else {}
+
+        params: dict[str, Any] = {'options': {}}
+        for k, v in block.items():
+            if k != 'options':
+                params[k] = v
+        self._apply_options(block, params)
+
+        node = Node(self._unique_name(name), 'n8n-nodes-base.dateTime', params, flags=flags)
+        self.nodes.append(node)
+
+    def parse_limit(self, line: str):
+        """Parse: LIMIT "Name" { maxItems: 10, keep: lastItems }"""
+        prefix, block_str = extract_block(line)
+        prefix, name = extract_as_name(prefix)
+        prefix, flags = extract_flags(prefix)
+        if not name:
+            m = re.match(r'LIMIT\s+' + QUOTED_NAME, prefix)
+            name = unquote_name(m.group(1)) if m else 'Limit'
+        block = parse_kv_block(block_str) if block_str else {}
+
+        params: dict[str, Any] = {}
+        for k, v in block.items():
+            if k != 'options':
+                params[k] = v
+        self._apply_options(block, params)
+
+        node = Node(self._unique_name(name), 'n8n-nodes-base.limit', params, flags=flags)
+        self.nodes.append(node)
+
+    def parse_switch(self, line: str):
+        """Parse: SWITCH "Name" { rules: [AND [...], AND [...]], options: { ignoreCase: true } }"""
+        prefix, block_str = extract_block(line)
+        prefix, name = extract_as_name(prefix)
+        prefix, flags = extract_flags(prefix)
+        if not name:
+            m = re.match(r'SWITCH\s+' + QUOTED_NAME, prefix)
+            name = unquote_name(m.group(1)) if m else 'Switch'
+        block = parse_kv_block(block_str) if block_str else {}
+
+        params: dict[str, Any] = {'options': {}}
+
+        rules_raw = block.get('rules', [])
+        if isinstance(rules_raw, list):
+            rule_values = []
+            for rule in rules_raw:
+                if isinstance(rule, str):
+                    rule_values.append(self._parse_switch_rule(rule))
+                elif isinstance(rule, dict):
+                    rule_values.append(rule)
+            params['rules'] = {'values': rule_values}
+        elif isinstance(rules_raw, dict):
+            params['rules'] = rules_raw
+
+        skip_keys = {'rules', 'options'}
+        for k, v in block.items():
+            if k not in skip_keys:
+                params[k] = v
+        self._apply_options(block, params)
+
+        node = Node(self._unique_name(name), 'n8n-nodes-base.switch', params, flags=flags)
+        self.nodes.append(node)
+
+    @staticmethod
+    def _parse_switch_rule(rule_str: str) -> dict:
+        """Parse a single SWITCH rule string like AND [{{ $json.x }} equals "y"]"""
+        rule_str = rule_str.strip()
+        combinator = 'and'
+        if rule_str.upper().startswith('OR'):
+            combinator = 'or'
+            rule_str = rule_str[2:].strip()
+        elif rule_str.upper().startswith('AND'):
+            combinator = 'and'
+            rule_str = rule_str[3:].strip()
+
+        if rule_str.startswith('['):
+            rule_str = rule_str[1:]
+        if rule_str.endswith(']'):
+            rule_str = rule_str[:-1]
+
+        cond_strings = smart_split(rule_str, ',')
+        parsed_conditions = [parse_condition_line(c) for c in cond_strings if c.strip()]
+
+        return {
+            'conditions': {
+                'options': {
+                    'caseSensitive': False,
+                    'leftValue': '',
+                    'typeValidation': 'loose',
+                    'version': 3
+                },
+                'conditions': parsed_conditions,
+                'combinator': combinator
+            }
+        }
+
+    def parse_loop(self, line: str):
+        """Parse: LOOP "Name" { batchSize: 1 }"""
+        prefix, block_str = extract_block(line)
+        prefix, name = extract_as_name(prefix)
+        prefix, flags = extract_flags(prefix)
+        if not name:
+            m = re.match(r'LOOP\s+' + QUOTED_NAME, prefix)
+            name = unquote_name(m.group(1)) if m else 'Loop Over Items'
+        block = parse_kv_block(block_str) if block_str else {}
+
+        params: dict[str, Any] = {'options': {}}
+        if 'batchSize' in block:
+            params['batchSize'] = int(block['batchSize'])
+        skip_keys = {'batchSize', 'options'}
+        for k, v in block.items():
+            if k not in skip_keys:
+                params[k] = v
+        self._apply_options(block, params)
+
+        node = Node(self._unique_name(name), 'n8n-nodes-base.splitInBatches', params, flags=flags)
+        self.nodes.append(node)
+
     def parse_position(self, line: str):
         m = re.match(r'POSITION\s+' + QUOTED_NAME + r'\s*\(\s*(-?\d+)\s*,\s*(-?\d+)\s*\)', line)
         if m:
@@ -1487,7 +1654,7 @@ class N8nFDLParser:
             # Check if next_part is a routing keyword
             upper = next_part.upper()
 
-            if upper in ('TRUE', 'OK'):
+            if upper in ('TRUE', 'OK', 'DONE'):
                 source_output = 0
                 if i + 2 < len(parts):
                     target_part = parts[i + 2]
@@ -1496,8 +1663,17 @@ class N8nFDLParser:
                     continue
                 i += 2
                 continue
-            elif upper in ('FALSE', 'ERR'):
+            elif upper in ('FALSE', 'ERR', 'LOOP'):
                 source_output = 1
+                if i + 2 < len(parts):
+                    target_part = parts[i + 2]
+                    self._add_connections_to_targets(source_name, source_output, target_part)
+                    i += 3
+                    continue
+                i += 2
+                continue
+            elif upper.isdigit():
+                source_output = int(upper)
                 if i + 2 < len(parts):
                     target_part = parts[i + 2]
                     self._add_connections_to_targets(source_name, source_output, target_part)
@@ -1568,8 +1744,16 @@ class N8nFDLParser:
                     self.parse_filter(line)
                 elif first_word == 'IF':
                     self.parse_if(line)
+                elif first_word == 'SWITCH':
+                    self.parse_switch(line)
                 elif first_word == 'MERGE':
                     self.parse_merge(line)
+                elif first_word == 'DATETIME':
+                    self.parse_datetime(line)
+                elif first_word == 'LIMIT':
+                    self.parse_limit(line)
+                elif first_word == 'LOOP':
+                    self.parse_loop(line)
                 elif first_word == 'GSHEET':
                     self.parse_gsheet(line)
                 elif first_word == 'GDRIVE':

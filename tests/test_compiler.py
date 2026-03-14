@@ -448,7 +448,7 @@ class TestParseConditionsBlock:
         block = {"conditions": 'AND [{{ $json.a }} equals "x"]'}
         result = parse_conditions_block(block)
         opts = result["conditions"]["options"]
-        assert opts["caseSensitive"] is True
+        assert opts["caseSensitive"] is False
         assert opts["version"] == 3
 
 
@@ -636,8 +636,8 @@ class TestParseTrigger:
         p = N8nFDLParser()
         p.parse_trigger('TRIGGER webhook AS "Hook"')
         node = p.nodes[0]
-        assert node.parameters["path"] == "/webhook"
-        assert node.parameters["httpMethod"] == "POST"
+        assert isinstance(node.parameters["path"], str) and len(node.parameters["path"]) > 0
+        assert node.parameters["httpMethod"] == "GET"
 
     def test_cron(self):
         p = N8nFDLParser()
@@ -821,6 +821,12 @@ class TestParseIf:
         p.parse_if('IF "Check" { conditions: OR [{{ $json.x }} equals "a", {{ $json.y }} equals "b"] }')
         result = p.nodes[0].parameters
         assert result["conditions"]["combinator"] == "or"
+
+    def test_case_insensitive_by_default(self):
+        p = N8nFDLParser()
+        p.parse_if('IF "Check" { conditions: AND [{{ $json.x }} equals "y"] }')
+        cond_opts = p.nodes[0].parameters["conditions"]["options"]
+        assert cond_opts["caseSensitive"] is False
 
 
 class TestParseMerge:
@@ -1554,17 +1560,35 @@ class TestUnifiedOptions:
         p = N8nFDLParser()
         p.parse_filter(
             'FILTER "Active" { conditions: AND [{{ $json.x }} notEmpty], '
-            'options: { looseTypeValidation: true } }'
+            'options: { ignoreCase: true } }'
         )
-        assert p.nodes[0].parameters['options']['looseTypeValidation'] is True
+        assert p.nodes[0].parameters['options']['ignoreCase'] is True
+
+    def test_filter_loose_type_validation_top_level(self):
+        p = N8nFDLParser()
+        p.parse_filter(
+            'FILTER "Active" { conditions: AND [{{ $json.x }} notEmpty], '
+            'looseTypeValidation: true }'
+        )
+        assert p.nodes[0].parameters['looseTypeValidation'] is True
+        assert 'looseTypeValidation' not in p.nodes[0].parameters.get('options', {})
 
     def test_if_options(self):
         p = N8nFDLParser()
         p.parse_if(
             'IF "Check" { conditions: AND [{{ $json.x }} equals "y"], '
-            'options: { looseTypeValidation: true } }'
+            'options: { ignoreCase: true } }'
         )
-        assert p.nodes[0].parameters['options']['looseTypeValidation'] is True
+        assert p.nodes[0].parameters['options']['ignoreCase'] is True
+
+    def test_if_loose_type_validation_top_level(self):
+        p = N8nFDLParser()
+        p.parse_if(
+            'IF "Check" { conditions: AND [{{ $json.x }} equals "y"], '
+            'looseTypeValidation: true }'
+        )
+        assert p.nodes[0].parameters['looseTypeValidation'] is True
+        assert 'looseTypeValidation' not in p.nodes[0].parameters.get('options', {})
 
     def test_agent_options_merge_with_system_message(self):
         p = N8nFDLParser()
@@ -1741,5 +1765,193 @@ class TestIntegrationRedditFile:
             if "credentials" in node:
                 for cred_type, cred_ref in node["credentials"].items():
                     assert cred_ref["id"] == cred_by_name[cred_ref["name"]]
+
+
+# ── New node types ──────────────────────────────────────────────────────────
+
+
+class TestDateTimeNode:
+    def test_basic_extract(self):
+        src = 'WORKFLOW "Test"\nDATETIME "Extract Week" { operation: extractDate, part: week }'
+        result = N8nFDLParser().parse(src)
+        node = result["nodes"][0]
+        assert node["type"] == "n8n-nodes-base.dateTime"
+        assert node["typeVersion"] == 2
+        assert node["parameters"]["operation"] == "extractDate"
+        assert node["parameters"]["part"] == "week"
+
+    def test_format_with_options(self):
+        src = 'WORKFLOW "T"\nDATETIME "Fmt" { operation: formatDate, format: "MM/DD/YYYY", options: { includeInputFields: true } }'
+        result = N8nFDLParser().parse(src)
+        node = result["nodes"][0]
+        assert node["parameters"]["format"] == "MM/DD/YYYY"
+        assert node["parameters"]["options"]["includeInputFields"] is True
+
+    def test_as_name(self):
+        src = 'WORKFLOW "T"\nDATETIME AS "My Date" { operation: getCurrentDate }'
+        result = N8nFDLParser().parse(src)
+        assert result["nodes"][0]["name"] == "My Date"
+
+    def test_default_name(self):
+        src = 'WORKFLOW "T"\nDATETIME "Date & Time" { operation: addToDate, duration: 7 }'
+        result = N8nFDLParser().parse(src)
+        assert result["nodes"][0]["name"] == "Date & Time"
+
+
+class TestLimitNode:
+    def test_keep_last(self):
+        src = 'WORKFLOW "T"\nLIMIT "Last 5" { keep: lastItems, maxItems: 5 }'
+        result = N8nFDLParser().parse(src)
+        node = result["nodes"][0]
+        assert node["type"] == "n8n-nodes-base.limit"
+        assert node["typeVersion"] == 1
+        assert node["parameters"]["keep"] == "lastItems"
+        assert node["parameters"]["maxItems"] == 5
+
+    def test_defaults(self):
+        src = 'WORKFLOW "T"\nLIMIT "Limit" { maxItems: 10 }'
+        result = N8nFDLParser().parse(src)
+        node = result["nodes"][0]
+        assert node["parameters"]["maxItems"] == 10
+        assert "keep" not in node["parameters"]
+
+
+class TestSwitchNode:
+    def test_basic_rules(self):
+        src = '''WORKFLOW "T"
+SWITCH "Route" { rules: [AND [{{ $json.type }} equals "email"], AND [{{ $json.type }} equals "sms"]] }'''
+        result = N8nFDLParser().parse(src)
+        node = result["nodes"][0]
+        assert node["type"] == "n8n-nodes-base.switch"
+        assert node["typeVersion"] == 3.4
+        rules = node["parameters"]["rules"]["values"]
+        assert len(rules) == 2
+        assert rules[0]["conditions"]["combinator"] == "and"
+        assert rules[0]["conditions"]["options"]["typeValidation"] == "loose"
+        conds = rules[0]["conditions"]["conditions"]
+        assert len(conds) == 1
+        assert conds[0]["operator"]["operation"] == "equals"
+
+    def test_or_combinator(self):
+        src = '''WORKFLOW "T"
+SWITCH "R" { rules: [OR [{{ $json.a }} isTrue, {{ $json.b }} isTrue]] }'''
+        result = N8nFDLParser().parse(src)
+        rules = result["nodes"][0]["parameters"]["rules"]["values"]
+        assert rules[0]["conditions"]["combinator"] == "or"
+        assert len(rules[0]["conditions"]["conditions"]) == 2
+
+    def test_extra_params(self):
+        src = '''WORKFLOW "T"
+SWITCH "R" { rules: [AND [{{ $json.x }} notEmpty]], looseTypeValidation: true, options: { ignoreCase: true } }'''
+        result = N8nFDLParser().parse(src)
+        params = result["nodes"][0]["parameters"]
+        assert params["looseTypeValidation"] is True
+        assert params["options"]["ignoreCase"] is True
+
+    def test_numeric_routing(self):
+        src = '''WORKFLOW "T"
+SWITCH "Route" { rules: [AND [{{ $json.x }} equals "a"], AND [{{ $json.x }} equals "b"]] }
+NOOP "A"
+NOOP "B"
+"Route" -> 0 -> "A"
+"Route" -> 1 -> "B"'''
+        result = N8nFDLParser().parse(src)
+        conns = result["connections"]["Route"]["main"]
+        assert conns[0][0]["node"] == "A"
+        assert conns[1][0]["node"] == "B"
+
+
+class TestLoopNode:
+    def test_basic(self):
+        src = 'WORKFLOW "T"\nLOOP "Process" { batchSize: 1 }'
+        result = N8nFDLParser().parse(src)
+        node = result["nodes"][0]
+        assert node["type"] == "n8n-nodes-base.splitInBatches"
+        assert node["typeVersion"] == 3
+        assert node["parameters"]["batchSize"] == 1
+
+    def test_default_name(self):
+        src = 'WORKFLOW "T"\nLOOP "Loop Over Items"'
+        result = N8nFDLParser().parse(src)
+        assert result["nodes"][0]["name"] == "Loop Over Items"
+
+    def test_done_loop_routing(self):
+        src = '''WORKFLOW "T"
+LOOP "Batch"
+NOOP "Work"
+NOOP "Finished"
+"Batch" -> LOOP -> "Work"
+"Work" -> "Batch"
+"Batch" -> DONE -> "Finished"'''
+        result = N8nFDLParser().parse(src)
+        conns = result["connections"]
+        batch_conns = conns["Batch"]["main"]
+        assert batch_conns[0][0]["node"] == "Finished"
+        assert batch_conns[1][0]["node"] == "Work"
+        assert conns["Work"]["main"][0][0]["node"] == "Batch"
+
+    def test_options_passthrough(self):
+        src = 'WORKFLOW "T"\nLOOP "L" { batchSize: 5, options: { reset: true } }'
+        result = N8nFDLParser().parse(src)
+        params = result["nodes"][0]["parameters"]
+        assert params["batchSize"] == 5
+        assert params["options"]["reset"] is True
+
+
+class TestFormTrigger:
+    def test_basic_form(self):
+        src = '''WORKFLOW "T"
+TRIGGER form AS "My Form" { formTitle: "Contact", formDescription: "Fill out" }'''
+        result = N8nFDLParser().parse(src)
+        node = result["nodes"][0]
+        assert node["type"] == "n8n-nodes-base.formTrigger"
+        assert node["typeVersion"] == 2.5
+        assert node["parameters"]["formTitle"] == "Contact"
+        assert node["parameters"]["formDescription"] == "Fill out"
+
+    def test_form_with_credential(self):
+        src = '''WORKFLOW "T"
+CREDENTIAL @basic = httpBasicAuth "My Auth"
+TRIGGER form @basic AS "Secure Form" { formTitle: "Login", authentication: basicAuth }'''
+        p = N8nFDLParser()
+        result = p.parse(src)
+        node = result["nodes"][0]
+        assert "httpBasicAuth" in node["credentials"]
+        assert node["parameters"]["authentication"] == "basicAuth"
+
+    def test_form_fields(self):
+        src = '''WORKFLOW "T"
+TRIGGER form AS "Form" { formTitle: "Test", formFields: { values: [{ fieldType: "email" }] } }'''
+        result = N8nFDLParser().parse(src)
+        fields = result["nodes"][0]["parameters"]["formFields"]
+        assert "values" in fields
+
+
+class TestWebhookFix:
+    def test_response_mode_passthrough(self):
+        src = 'WORKFLOW "T"\nTRIGGER webhook AS "Hook" { path: "/test", method: POST, responseMode: lastNode }'
+        result = N8nFDLParser().parse(src)
+        node = result["nodes"][0]
+        assert node["parameters"]["responseMode"] == "lastNode"
+        assert node["parameters"]["httpMethod"] == "POST"
+
+    def test_streaming_mode(self):
+        src = 'WORKFLOW "T"\nTRIGGER webhook AS "Stream" { method: POST, responseMode: streaming }'
+        result = N8nFDLParser().parse(src)
+        node = result["nodes"][0]
+        assert node["parameters"]["responseMode"] == "streaming"
+
+    def test_webhook_type_version(self):
+        src = 'WORKFLOW "T"\nTRIGGER webhook AS "Hook" { path: "/x" }'
+        result = N8nFDLParser().parse(src)
+        assert result["nodes"][0]["typeVersion"] == 2.1
+
+    def test_webhook_options(self):
+        src = '''WORKFLOW "T"
+TRIGGER webhook AS "Hook" { method: POST, responseMode: responseNode, options: { binaryPropertyName: "data" } }'''
+        result = N8nFDLParser().parse(src)
+        params = result["nodes"][0]["parameters"]
+        assert params["responseMode"] == "responseNode"
+        assert params["options"]["binaryPropertyName"] == "data"
 
 

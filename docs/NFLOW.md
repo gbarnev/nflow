@@ -96,7 +96,19 @@ TRIGGER gsheets_update AS "Sheet Trigger" {
 }
 
 TRIGGER webhook AS "Webhook" { path: "/my-hook", method: POST }
+TRIGGER webhook AS "Streaming Hook" { method: POST, responseMode: streaming }
+TRIGGER webhook AS "Last Node" { responseMode: lastNode, options: { rawBody: true } }
 TRIGGER cron AS "Schedule" { expression: "0 * * * *" }
+TRIGGER form @basicauth AS "My Form" {
+  formTitle: "Contact Us",
+  formDescription: "Fill out this form",
+  authentication: basicAuth,
+  formFields: { values: [
+    {},
+    { fieldType: "email" },
+    { fieldType: "number" }
+  ]}
+}
 ```
 
 ### SET — Assign variables
@@ -160,12 +172,70 @@ IF "Has Data?" { conditions: OR [{{ $json.items }} arrayNotEmpty] }
 
 **Available operators:** `equals`, `notEquals`, `contains`, `notContains`, `startsWith`, `endsWith`, `empty`, `notEmpty`, `exists`, `notExists`, `gt`, `gte`, `lt`, `lte`, `numEquals`, `isTrue`, `isFalse`, `regex`, `arrayEmpty`, `arrayNotEmpty`
 
+### SWITCH — N-way conditional routing
+
+```nflow
+// Each rule is a routing output; reuses IF/FILTER condition syntax
+SWITCH "Route By Type" { rules: [
+  AND [{{ $json.type }} equals "email"],
+  AND [{{ $json.type }} equals "sms"],
+  AND [{{ $json.type }} equals "push"]
+]}
+
+// Rules with multiple conditions per branch
+SWITCH "Complex Route" { rules: [
+  AND [{{ $json.type }} equals "email", {{ $json.priority }} gt 5],
+  OR [{{ $json.active }} isTrue, {{ $json.admin }} isTrue]
+], looseTypeValidation: true, options: { ignoreCase: true } }
+
+// Connect outputs by index
+"Route By Type" -> 0 -> "Handle Email"
+"Route By Type" -> 1 -> "Handle SMS"
+"Route By Type" -> 2 -> "Handle Push"
+```
+
 ### MERGE — Combine branches
 
 ```nflow
 MERGE "Combine All" { mode: combine, by: position, inputs: 3 }
 MERGE "Pick Branch" { mode: chooseBranch, useInput: 2 }
 MERGE "Append" { mode: append }
+```
+
+### DATETIME — Date & time operations
+
+```nflow
+DATETIME "Extract Week" { operation: extractDate, part: week }
+DATETIME "Format Date" { operation: formatDate, date: {{ $json.created }}, format: "MM/DD/YYYY" }
+DATETIME "Current Date" { operation: getCurrentDate, includeCurrentTime: true }
+DATETIME "Time Between" {
+  operation: getTimeBetweenDates,
+  startDate: {{ $json.start }},
+  endDate: {{ $json.end }},
+  units: ["day", "hour"]
+}
+DATETIME "Add 7 Days" { operation: addToDate, duration: 7, timeUnit: days }
+```
+
+**Operations:** `addToDate`, `extractDate`, `formatDate`, `getCurrentDate`, `getTimeBetweenDates`, `roundDate`, `subtractFromDate`
+
+### LIMIT — Keep first/last N items
+
+```nflow
+LIMIT "First 10" { maxItems: 10 }
+LIMIT "Last 5" { maxItems: 5, keep: lastItems }
+```
+
+### LOOP — Loop Over Items (Split in Batches)
+
+```nflow
+LOOP "Process Items" { batchSize: 1 }
+LOOP "Batch of 10" { batchSize: 10 }
+
+// Output 0 = done (all processed), Output 1 = loop body (current batch)
+"Process Items" -> LOOP -> "Do Work"
+"Do Work" -> "Process Items"
+"Process Items" -> DONE -> "All Finished"
 ```
 
 ### GSHEET — Google Sheets
@@ -312,6 +382,16 @@ TRIGGER chat AS "Chat Window" {
 "Branch B" -> "Merge":1
 "Branch C" -> "Merge":2
 
+// Numeric output routing (for Switch and other N-output nodes)
+"Switch" -> 0 -> "First Branch"
+"Switch" -> 1 -> "Second Branch"
+"Switch" -> 2 -> "Third Branch"
+
+// Loop routing (DONE = all processed, LOOP = current batch)
+"Loop" -> DONE -> "All Finished"
+"Loop" -> LOOP -> "Process Item"
+"Process Item" -> "Loop"
+
 // AI connections (LLM, memory, tools wired to an agent)
 "Gemini" -> LLM -> "My Agent"
 "Chat Memory" -> MEMORY -> "My Agent"
@@ -424,14 +504,18 @@ Auto-calculated if omitted.
 | `WORKFLOW` | `WORKFLOW "Name" [active]` | Declare workflow |
 | `CREDENTIAL` | `CREDENTIAL @alias = type "Name"` | Reusable auth |
 | **Triggers** | | |
-| `TRIGGER` | `TRIGGER type AS "Name" { ... }` | Entry point (manual, webhook, cron, gsheets_update, chat) |
+| `TRIGGER` | `TRIGGER type AS "Name" { ... }` | Entry point (manual, webhook, cron, gsheets_update, chat, form) |
 | **Data Nodes** | | |
 | `SET` | `SET "Name" { k: v } [+passthrough]` | Assign variables |
 | `HTTP` | `HTTP METHOD url @cred AS "Name" { ... }` | API request |
 | `CODE` | `CODE "Name" \`...\`` | JavaScript transform |
 | `FILTER` | `FILTER "Name" { conditions: ... }` | Keep matching items |
 | `IF` | `IF "Name" { conditions: ... }` | Branch TRUE/FALSE |
+| `SWITCH` | `SWITCH "Name" { rules: [...] }` | N-way conditional routing |
 | `MERGE` | `MERGE "Name" { mode: ... }` | Combine branches |
+| `DATETIME` | `DATETIME "Name" { operation: ... }` | Date & time operations |
+| `LIMIT` | `LIMIT "Name" { maxItems: N }` | Keep first/last N items |
+| `LOOP` | `LOOP "Name" { batchSize: N }` | Loop over items in batches |
 | `GSHEET` | `GSHEET OP @cred AS "Name" { ... }` | Google Sheets |
 | `GDRIVE` | `GDRIVE OP @cred AS "Name" { ... }` | Google Drive |
 | `NOOP` | `NOOP "Name"` | Passthrough |
@@ -445,6 +529,8 @@ Auto-calculated if omitted.
 | `->` | `"A" -> "B"` | Connect nodes |
 | `-> TRUE/FALSE ->` | `"If" -> TRUE -> "B"` | Branch output |
 | `-> OK/ERR ->` | `"Http" -> ERR -> "B"` | Error routing |
+| `-> N ->` | `"Switch" -> 0 -> "B"` | Numeric output index |
+| `-> DONE/LOOP ->` | `"Loop" -> DONE -> "B"` | Loop routing (done/body) |
 | `-> LLM/TOOL/MEMORY ->` | `"Gemini" -> LLM -> "Agent"` | AI connection |
 | `"Node":N` | `"A" -> "Merge":1` | Target input slot |
 | **Node Settings** | | |
