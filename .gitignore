@@ -155,7 +155,8 @@ venv.bak/
 /site
 
 # Generated node reference docs (regenerated from node-registry.json)
-docs/nodes/
+docs/nodes/*.md
+!docs/nodes/index.md
 docs/NODE-CATALOG.md
 
 # mypy
