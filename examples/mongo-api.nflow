@@ -1,0 +1,93 @@
+WORKFLOW "MongoDB REST API" active
+
+// ================================================================
+// Credentials
+// ================================================================
+
+CREDENTIAL @mongo = mongoDb "Mongo Atlas"
+
+// ================================================================
+// Trigger: webhook with lastNode response mode
+// ================================================================
+
+TRIGGER webhook AS "API Gateway" { path: "/api/items", method: POST, responseMode: lastNode }
+
+// ================================================================
+// Route by action field
+// ================================================================
+
+SWITCH "Action Router" { rules: [
+  AND [{{ $json.body.action }} equals "list"],
+  AND [{{ $json.body.action }} equals "get"],
+  AND [{{ $json.body.action }} equals "create"],
+  AND [{{ $json.body.action }} equals "delete"]
+]}
+
+// ================================================================
+// List: find all documents
+// ================================================================
+
+NODE "mongoDb" @mongo AS "Find All" {
+  resource: "document",
+  operation: "find",
+  collection: "items",
+  query: "{}",
+  options: { limit: 100 }
+}
+
+// ================================================================
+// Get: find one by ID
+// ================================================================
+
+NODE "mongoDb" @mongo AS "Find One" {
+  resource: "document",
+  operation: "find",
+  collection: "items",
+  query: {{ "{\"_id\": \"" + $json.body.id + "\"}" }}
+}
+
+// ================================================================
+// Create: insert a new document
+// ================================================================
+
+SET "Build Document" {
+  name: {{ $json.body.name }},
+  status: "active",
+  createdAt: {{ new Date().toISOString() }}
+}
+
+NODE "mongoDb" @mongo AS "Insert Doc" {
+  resource: "document",
+  operation: "insert",
+  collection: "items",
+  fields: "name,status,createdAt"
+}
+
+// ================================================================
+// Delete: remove by ID
+// ================================================================
+
+NODE "mongoDb" @mongo AS "Delete Doc" {
+  resource: "document",
+  operation: "deleteOne",
+  collection: "items",
+  query: {{ "{\"_id\": \"" + $json.body.id + "\"}" }}
+}
+
+// ================================================================
+// Respond to all requests
+// ================================================================
+
+NODE "respondToWebhook" AS "API Response" {
+  respondWith: "allIncomingItems"
+}
+
+// ================================================================
+// Connections
+// ================================================================
+
+"API Gateway" -> "Action Router"
+"Action Router" -> 0 -> "Find All" -> "API Response"
+"Action Router" -> 1 -> "Find One" -> "API Response"
+"Action Router" -> 2 -> "Build Document" -> "Insert Doc" -> "API Response"
+"Action Router" -> 3 -> "Delete Doc" -> "API Response"

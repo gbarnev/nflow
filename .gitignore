@@ -154,6 +154,10 @@ venv.bak/
 # mkdocs documentation
 /site
 
+# Generated node reference docs (regenerated from node-registry.json)
+docs/nodes/
+docs/NODE-CATALOG.md
+
 # mypy
 .mypy_cache/
 .dmypy.json

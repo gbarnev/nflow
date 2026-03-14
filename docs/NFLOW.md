@@ -318,6 +318,8 @@ The `NODE` keyword supports all standard features: `@credential` references, `AS
 
 **When to use NODE vs ergonomic keywords:** Use `HTTP`, `GSHEET`, `TRIGGER`, etc. for their concise syntax when available. Use `NODE` for any n8n node not covered by a dedicated keyword (Postgres, Redis, Slack, Notion, Jira, Airtable, etc.).
 
+> **Full parameter reference for all 547 nodes:** See [NODE-CATALOG.md](NODE-CATALOG.md) for the compact index, or open [nodes/](nodes/index.md) for detailed parameters and examples.
+
 ### NOOP — Passthrough / convergence point
 
 ```nflow

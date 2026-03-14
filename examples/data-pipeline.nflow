@@ -1,0 +1,91 @@
+WORKFLOW "Data Processing Pipeline" active
+
+// ================================================================
+// Credentials
+// ================================================================
+
+CREDENTIAL @pg = postgres "Analytics DB"
+CREDENTIAL @slack = slackOAuth2Api "Slack Reports"
+
+// ================================================================
+// Schedule: run every hour
+// ================================================================
+
+TRIGGER cron AS "Hourly Sync" { expression: "0 * * * *" }
+
+// ================================================================
+// Fetch raw data from Postgres
+// ================================================================
+
+NODE "postgres" @pg AS "Fetch Orders" {
+  operation: "executeQuery",
+  query: "SELECT * FROM orders WHERE created_at > NOW() - INTERVAL '1 hour'"
+}
+
+// ================================================================
+// Data transforms using generic nodes
+// ================================================================
+
+// Remove duplicate orders (by order_id)
+NODE "removeDuplicates" AS "Deduplicate" {
+  operation: "removeDuplicateInputItems",
+  compare: "selectedFields",
+  fieldsToCompare: "order_id"
+}
+
+// Sort by amount descending
+NODE "sort" AS "Sort by Amount" {
+  type: "simple",
+  sortFieldsUi: { sortField: [{ fieldName: "amount", order: "descending" }] }
+}
+
+// Split comma-separated tags into individual items
+NODE "splitOut" AS "Expand Tags" {
+  fieldToSplitOut: "tags",
+  include: "allOtherFields"
+}
+
+// Aggregate: count + sum per category
+NODE "summarize" AS "Stats by Category" {
+  fieldsToSummarize: {
+    values: [
+      { aggregation: "count", field: "order_id" },
+      { aggregation: "sum", field: "amount" }
+    ]
+  },
+  fieldsToSplitBy: "category"
+}
+
+// Aggregate all items into a single array
+NODE "aggregate" AS "Collect All" {
+  aggregate: "aggregateAllItemData",
+  destinationFieldName: "report"
+}
+
+// ================================================================
+// Convert to CSV file
+// ================================================================
+
+NODE "convertToFile" AS "Export CSV" {
+  operation: "csv",
+  binaryPropertyName: "report_csv"
+}
+
+// ================================================================
+// Post summary to Slack
+// ================================================================
+
+NODE "slack" @slack AS "Post Report" {
+  resource: "message",
+  operation: "post",
+  channelId: "#daily-reports",
+  text: {{ "Hourly report: " + $json.report.length + " categories processed" }}
+}
+
+// ================================================================
+// Connections
+// ================================================================
+
+"Hourly Sync" -> "Fetch Orders" -> "Deduplicate" -> "Sort by Amount"
+"Sort by Amount" -> "Expand Tags" -> "Stats by Category"
+"Stats by Category" -> "Collect All" -> "Export CSV" -> "Post Report"

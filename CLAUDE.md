@@ -22,11 +22,18 @@ tests/
 examples/
   agent.nflow                — AI agent with tools
   reddit.nflow               — Reddit API with credentials
+  generic-nodes.nflow        — Webhook API with Postgres, Redis, Slack, Telegram, Email
+  data-pipeline.nflow        — Hourly ETL with Sort, Aggregate, Deduplicate, CSV export
+  devops-alerts.nflow        — Multi-branch DevOps with GitHub, Jira, Discord, SSH
+  mongo-api.nflow            — MongoDB REST API with SWITCH routing
 scripts/
   n8n-sync.sh                — Export/import credentials & workflows via Docker
   extract-node-registry.py   — Extract node definitions from n8n source into node-registry.json
+  generate-node-reference.py — Generate docs/NODE-CATALOG.md + docs/nodes/*.md
 docs/
   NFLOW.md                   — Full language grammar and reference
+  NODE-CATALOG.md            — Compact index of all 547 nodes (auto-generated)
+  nodes/                     — Per-node reference pages (547 files, auto-generated)
 node-registry.json           — Extracted n8n node definitions (547 nodes, generated)
 ```
 
@@ -46,6 +53,9 @@ n8n-sync deploy workflow.json credentials.json
 
 # Regenerate node registry from n8n source (requires built n8n repo)
 python3 scripts/extract-node-registry.py /path/to/n8n-repo -o node-registry.json --include-credentials --stats
+
+# Regenerate node reference docs (catalog + per-node pages)
+python3 scripts/generate-node-reference.py
 
 # Run all tests
 pytest -v
