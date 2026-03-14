@@ -25,6 +25,10 @@ from nflow.compiler import (
     Connection,
     KNOWN_KEYWORDS,
     N8nFDLParser,
+    NodeRegistry,
+    get_registry,
+    serialize_param,
+    serialize_node_params,
     main,
 )
 
@@ -34,6 +38,10 @@ __all__ = [
     "N8nFDLParser",
     "Node",
     "Connection",
+    "NodeRegistry",
+    "get_registry",
+    "serialize_param",
+    "serialize_node_params",
     "main",
     "tokenize_lines",
     "tokenize_with_lines",

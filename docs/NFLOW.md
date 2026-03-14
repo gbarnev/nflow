@@ -260,6 +260,64 @@ GSHEET UPDATE @gsheets AS "Write Status" {
 GDRIVE DOWNLOAD @gdrive AS "Get File" { fileId: {{ $json.fileId }} }
 ```
 
+### NODE — Generic node (any n8n node type)
+
+The `NODE` keyword lets you use **any** of the 500+ n8n nodes, even those without a dedicated DSL keyword. The compiler looks up the node type in the registry to resolve the correct version and serialize parameters.
+
+```nflow
+// Postgres query
+NODE "n8n-nodes-base.postgres" @pg AS "Query DB" {
+  operation: "executeQuery",
+  query: "SELECT * FROM users WHERE active = true"
+}
+
+// Redis cache
+NODE "n8n-nodes-base.redis" @redis AS "Cache Result" {
+  operation: "set",
+  key: "users_cache",
+  value: {{ JSON.stringify($json) }},
+  expire: true,
+  ttl: 3600
+}
+
+// Respond to webhook
+NODE "n8n-nodes-base.respondToWebhook" AS "Respond" {
+  respondWith: "json",
+  responseBody: {{ JSON.stringify($json) }}
+}
+
+// Slack message
+NODE "n8n-nodes-base.slack" @slack AS "Send Alert" {
+  resource: "message",
+  operation: "post",
+  channel: "#alerts",
+  text: {{ "Alert: " + $json.message }}
+}
+
+// Google Calendar event
+NODE "n8n-nodes-base.googleCalendar" @gcal AS "Create Event" {
+  resource: "event",
+  operation: "create",
+  calendarId: "primary",
+  start: "2025-01-01T10:00:00",
+  end: "2025-01-01T11:00:00"
+}
+
+// Short form: if no dot in type name, "n8n-nodes-base." is assumed
+NODE "redis" @redis AS "Get Key" { operation: "get", key: "mykey" }
+
+// All standard settings work: credentials, flags, options
+NODE "n8n-nodes-base.httpRequest" @api AS "Fetch" +retry onError:continue {
+  method: "GET",
+  url: "https://api.example.com/data",
+  options: { timeout: 5000 }
+}
+```
+
+The `NODE` keyword supports all standard features: `@credential` references, `AS "Name"`, flags (`+once`, `+retry`, `onError:`, `disabled`, `notes:`), and `options: { }` blocks.
+
+**When to use NODE vs ergonomic keywords:** Use `HTTP`, `GSHEET`, `TRIGGER`, etc. for their concise syntax when available. Use `NODE` for any n8n node not covered by a dedicated keyword (Postgres, Redis, Slack, Notion, Jira, Airtable, etc.).
+
 ### NOOP — Passthrough / convergence point
 
 ```nflow
@@ -518,6 +576,7 @@ Auto-calculated if omitted.
 | `LOOP` | `LOOP "Name" { batchSize: N }` | Loop over items in batches |
 | `GSHEET` | `GSHEET OP @cred AS "Name" { ... }` | Google Sheets |
 | `GDRIVE` | `GDRIVE OP @cred AS "Name" { ... }` | Google Drive |
+| `NODE` | `NODE "type" @cred AS "Name" { ... }` | Any n8n node (generic, 500+ supported) |
 | `NOOP` | `NOOP "Name"` | Passthrough |
 | `NOTE` | `NOTE "Name" { content: ... }` | Sticky note |
 | **AI Agent Nodes** | | |
@@ -545,3 +604,67 @@ Auto-calculated if omitted.
 | `options` | `options: { key: val }` | n8n node options (any node) |
 | `{{ expr }}` | `{{ $json.field }}` | n8n expression |
 | `//` | `// comment` | Comment |
+
+---
+
+## 8. Node Registry
+
+nflow includes a **node registry** (`node-registry.json`) that contains metadata for all 547 built-in n8n nodes. This enables the generic `NODE` keyword and provides automatic version resolution for all nodes.
+
+### What the registry contains
+
+For each n8n node, the registry stores only what the compiler needs:
+
+- **version** — the latest `typeVersion` number
+- **group** — whether it's a trigger, transform, etc.
+- **inputs/outputs** — connection types (main, ai_tool, ai_memory, etc.)
+- **credentials** — which credential types the node accepts
+- **properties** — every parameter with its name, type, default value, valid options, and nested children
+
+UI-only fields (`displayName`, `description`, `icon`, `placeholder`, `displayOptions`, `routing`) are stripped to keep the registry compact.
+
+### How the compiler uses it
+
+1. **Version resolution** — When emitting `typeVersion`, the compiler checks hardcoded values first (for ergonomic keywords), then falls back to the registry. This means even a `NODE "n8n-nodes-base.notion"` call gets the correct version without any hardcoding.
+
+2. **Type-aware serialization** — The `NODE` keyword uses registry property types to serialize DSL values into the correct JSON format. For example, a `resourceLocator` property is automatically wrapped as `{"__rl": true, "mode": "url", "value": "..."}`.
+
+3. **Graceful fallback** — If `node-registry.json` is not present, the compiler still works for all ergonomic keywords. Only the `NODE` keyword benefits from the registry; it is not required for existing syntax.
+
+### Regenerating the registry
+
+The registry is extracted from a built n8n repository:
+
+```bash
+# 1. Build n8n (requires the n8n source repo)
+cd /path/to/n8n
+pnpm install
+pnpm build --filter=n8n-nodes-base...
+pnpm build --filter=@n8n/n8n-nodes-langchain...
+
+# 2. Extract into nflow project
+python3 scripts/extract-node-registry.py /path/to/n8n \
+  -o node-registry.json \
+  --include-credentials \
+  --stats
+```
+
+This reads `dist/types/nodes.json` from both `packages/nodes-base` (core nodes) and `packages/@n8n/nodes-langchain` (AI nodes), filters to compiler-relevant fields, keeps only the latest version of each node, and writes the registry.
+
+### Parameter type mapping
+
+The registry tracks n8n property types. The compiler serializes each type as follows:
+
+| n8n Property Type | JSON Output Format |
+|---|---|
+| `string` | Raw string, or `"={{ expr }}"` for expressions |
+| `number` | Number |
+| `boolean` | `true` / `false` |
+| `options` | One of the allowed value strings |
+| `multiOptions` | Array of value strings |
+| `json` | Raw JSON string or object |
+| `collection` | `{ key: value, ... }` object |
+| `fixedCollection` | `{ groupName: { ... } }` or `{ groupName: [{ ... }] }` |
+| `resourceLocator` | `{ __rl: true, mode: "url"/"id"/"list", value: "..." }` |
+| `filter` | n8n filter condition structure |
+| `assignmentCollection` | `{ assignments: [{ name, value, type }] }` |
