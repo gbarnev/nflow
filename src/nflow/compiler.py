@@ -623,6 +623,15 @@ class N8nFDLParser:
         credentials = self._resolve_credential(cred_alias)
         return auth_params, credentials
 
+    @staticmethod
+    def _apply_options(block: dict, params: dict):
+        """Merge user-provided options: { ... } from the DSL block into params['options']."""
+        user_opts = block.get('options')
+        if isinstance(user_opts, dict) and user_opts:
+            if 'options' not in params:
+                params['options'] = {}
+            params['options'].update(user_opts)
+
     # --- Parse individual statement types ---
 
     def parse_workflow(self, line: str):
@@ -670,6 +679,7 @@ class N8nFDLParser:
             if block.get('watch'):
                 params['options']['columnsToWatch'] = block['watch'] if isinstance(block['watch'], list) else [block['watch']]
                 params['includeInOutput'] = 'both'
+            self._apply_options(block, params)
 
             creds = {}
             cred_alias = block.get('credential', '')
@@ -687,6 +697,7 @@ class N8nFDLParser:
                 'httpMethod': block.get('method', 'POST'),
                 'options': {}
             }
+            self._apply_options(block, params)
             node = Node(name, 'n8n-nodes-base.webhook', params)
 
         elif trigger_type in ('cron', 'schedule'):
@@ -716,6 +727,7 @@ class N8nFDLParser:
                 opts['showWelcomeScreen'] = block['showWelcomeScreen']
             if block.get('customCss'):
                 opts['customCss'] = block['customCss']
+            self._apply_options(block, params)
 
             node = Node(name, '@n8n/n8n-nodes-langchain.chatTrigger', params)
 
@@ -742,6 +754,8 @@ class N8nFDLParser:
 
         assignments = []
         for key, val in block.items():
+            if key == 'options':
+                continue
             a = {
                 'id': generate_id(),
                 'name': key,
@@ -760,6 +774,7 @@ class N8nFDLParser:
         }
         if flags.get('passthrough'):
             params['includeOtherFields'] = True
+        self._apply_options(block, params)
 
         node = Node(self._unique_name(name), 'n8n-nodes-base.set', params, flags=flags)
         self.nodes.append(node)
@@ -850,6 +865,8 @@ class N8nFDLParser:
                     ]
                 }
 
+        self._apply_options(block, params)
+
         node = Node(self._unique_name(name), 'n8n-nodes-base.httpRequest', params,
                      credentials=credentials, flags=flags)
         self.nodes.append(node)
@@ -883,6 +900,7 @@ class N8nFDLParser:
 
         block = parse_kv_block(block_str) if block_str else {}
         params = parse_conditions_block(block)
+        self._apply_options(block, params)
 
         node = Node(self._unique_name(name), 'n8n-nodes-base.filter', params)
         self.nodes.append(node)
@@ -894,6 +912,7 @@ class N8nFDLParser:
 
         block = parse_kv_block(block_str) if block_str else {}
         params = parse_conditions_block(block)
+        self._apply_options(block, params)
 
         node = Node(self._unique_name(name), 'n8n-nodes-base.if', params)
         self.nodes.append(node)
@@ -921,6 +940,8 @@ class N8nFDLParser:
                 params['useDataOfInput'] = int(block['useInput'])
         elif mode == 'append':
             pass
+
+        self._apply_options(block, params)
 
         node = Node(self._unique_name(name), 'n8n-nodes-base.merge', params)
         self.nodes.append(node)
@@ -978,6 +999,7 @@ class N8nFDLParser:
             params['columns'] = columns
 
         params['options'] = {}
+        self._apply_options(block, params)
 
         credentials = {}
         if cred_alias:
@@ -1007,6 +1029,7 @@ class N8nFDLParser:
         params: dict[str, Any] = {'operation': operation, 'options': {}}
         if block.get('fileId'):
             params['fileId'] = {'__rl': True, 'value': wrap_expr(str(block['fileId'])), 'mode': 'id'}
+        self._apply_options(block, params)
 
         credentials = {}
         if cred_alias:
@@ -1030,6 +1053,7 @@ class N8nFDLParser:
         params: dict[str, Any] = {'options': {}}
         if block.get('systemMessage'):
             params['options']['systemMessage'] = block['systemMessage']
+        self._apply_options(block, params)
 
         node = Node(self._unique_name(name), '@n8n/n8n-nodes-langchain.agent', params)
         self.nodes.append(node)
@@ -1096,9 +1120,9 @@ class N8nFDLParser:
             else:
                 params[pinfo['model_key']] = model_val
 
-        # Temperature and other options
         if 'temperature' in block:
             params['options']['temperature'] = block['temperature']
+        self._apply_options(block, params)
 
         # Credentials
         credentials = {}
@@ -1142,6 +1166,7 @@ class N8nFDLParser:
         params: dict[str, Any] = {}
         if 'contextWindowLength' in block:
             params['contextWindowLength'] = int(block['contextWindowLength'])
+        self._apply_options(block, params)
 
         node = Node(self._unique_name(name), n8n_type, params)
         self.nodes.append(node)
@@ -1239,6 +1264,8 @@ class N8nFDLParser:
         # Wikipedia has no params
         elif tool_type == 'wikipedia':
             pass
+
+        self._apply_options(block, params)
 
         # Credentials
         credentials = {}

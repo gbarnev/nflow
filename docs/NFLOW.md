@@ -287,7 +287,40 @@ TRIGGER chat AS "Chat Window" {
 
 ---
 
-## 4. Layout (optional)
+## 4. Node Options
+
+Any node that supports n8n options can include an `options: { ... }` block. Options are passed through directly to the n8n node's `parameters.options` object.
+
+```nflow
+// HTTP with timeout and proxy
+HTTP POST https://api.example.com @myapi AS "Create" {
+  body: { name: "test" },
+  options: { timeout: 10000, proxy: "http://myproxy:3821", allowUnauthorizedCerts: true }
+}
+
+// Google Sheets with locale
+GSHEET READ @gsheets AS "Get Rows" {
+  doc: "https://docs.google.com/.../edit",
+  sheet: "Sheet1",
+  options: { locale: "en", autoRecalc: "ON_CHANGE" }
+}
+
+// Merge with reset
+MERGE "Batch" { mode: append, options: { reset: true } }
+
+// Agent with extra options alongside systemMessage
+AGENT "Bot" { systemMessage: "You are helpful", options: { maxIterations: 10 } }
+
+// SET with dotNotation
+SET "Config" { apiUrl: "https://..." } +passthrough
+// options: { dotNotation: true } can be added to any SET block
+```
+
+Shorthand keys like `systemMessage` (AGENT), `temperature` (LLM), and `title`/`subtitle` (TRIGGER chat) continue to work. If the same key appears in both the shorthand and `options:`, the `options:` value takes precedence.
+
+---
+
+## 5. Layout (optional)
 
 ```nflow
 POSITION "Node Name" (100, 200)
@@ -297,7 +330,7 @@ Auto-calculated if omitted.
 
 ---
 
-## 5. Comments
+## 6. Comments
 
 ```nflow
 // Single-line comments anywhere
@@ -337,6 +370,7 @@ Auto-calculated if omitted.
 | `-> LLM/TOOL/MEMORY ->` | `"Gemini" -> LLM -> "Agent"` | AI connection |
 | `"Node":N` | `"A" -> "Merge":1` | Target input slot |
 | **Other** | | |
+| `options` | `options: { key: val }` | n8n node options (any node) |
 | `{{ expr }}` | `{{ $json.field }}` | n8n expression |
 | `//` | `// comment` | Comment |
 | `disabled` | `LLM openai AS "X" disabled { ... }` | Disable a node |

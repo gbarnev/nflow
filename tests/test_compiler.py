@@ -1199,6 +1199,135 @@ LLM openai AS "Backup" disabled { model: "gpt-4" }
 
 
 # =========================================================================
+# Unified options: { ... } support across node types
+# =========================================================================
+
+class TestUnifiedOptions:
+    """Test that options: { ... } in DSL blocks merges into params['options']."""
+
+    def test_http_options(self):
+        p = N8nFDLParser()
+        p.parse_http(
+            'HTTP POST https://api.com AS "Req" { '
+            'body: { x: 1 }, options: { timeout: 10000, proxy: "http://p:3821" } }'
+        )
+        opts = p.nodes[0].parameters['options']
+        assert opts['timeout'] == 10000
+        assert opts['proxy'] == 'http://p:3821'
+
+    def test_http_options_with_nested_values(self):
+        p = N8nFDLParser()
+        p.parse_http(
+            'HTTP GET https://api.com AS "Req" { options: { allowUnauthorizedCerts: true } }'
+        )
+        assert p.nodes[0].parameters['options']['allowUnauthorizedCerts'] is True
+
+    def test_set_options(self):
+        p = N8nFDLParser()
+        p.parse_set('SET "Config" { apiUrl: "https://x.com", options: { dotNotation: true } }')
+        node = p.nodes[0]
+        assert node.parameters['options']['dotNotation'] is True
+        names = [a['name'] for a in node.parameters['assignments']['assignments']]
+        assert 'options' not in names
+        assert 'apiUrl' in names
+
+    def test_gsheet_options(self):
+        p = N8nFDLParser()
+        p.parse_gsheet(
+            'GSHEET READ @gs AS "Rows" { '
+            'doc: "https://docs.google.com/x", sheet: "Sheet1", '
+            'options: { locale: "en", autoRecalc: "ON_CHANGE" } }'
+        )
+        opts = p.nodes[0].parameters['options']
+        assert opts['locale'] == 'en'
+        assert opts['autoRecalc'] == 'ON_CHANGE'
+
+    def test_gdrive_options(self):
+        p = N8nFDLParser()
+        p.parse_gdrive('GDRIVE DOWNLOAD AS "File" { fileId: "abc", options: { fileName: "out.pdf" } }')
+        assert p.nodes[0].parameters['options']['fileName'] == 'out.pdf'
+
+    def test_merge_options(self):
+        p = N8nFDLParser()
+        p.parse_merge('MERGE "Combine" { mode: append, options: { fuzzy: true } }')
+        assert p.nodes[0].parameters['options']['fuzzy'] is True
+
+    def test_filter_options(self):
+        p = N8nFDLParser()
+        p.parse_filter(
+            'FILTER "Active" { conditions: AND [{{ $json.x }} notEmpty], '
+            'options: { looseTypeValidation: true } }'
+        )
+        assert p.nodes[0].parameters['options']['looseTypeValidation'] is True
+
+    def test_if_options(self):
+        p = N8nFDLParser()
+        p.parse_if(
+            'IF "Check" { conditions: AND [{{ $json.x }} equals "y"], '
+            'options: { looseTypeValidation: true } }'
+        )
+        assert p.nodes[0].parameters['options']['looseTypeValidation'] is True
+
+    def test_agent_options_merge_with_system_message(self):
+        p = N8nFDLParser()
+        p.parse_agent(
+            'AGENT "Bot" { systemMessage: "You are helpful", '
+            'options: { maxIterations: 10 } }'
+        )
+        opts = p.nodes[0].parameters['options']
+        assert opts['systemMessage'] == 'You are helpful'
+        assert opts['maxIterations'] == 10
+
+    def test_llm_options_merge_with_temperature(self):
+        p = N8nFDLParser()
+        p.parse_llm(
+            'LLM openai AS "GPT" { model: "gpt-4", temperature: 0.5, '
+            'options: { topP: 0.9 } }'
+        )
+        opts = p.nodes[0].parameters['options']
+        assert opts['temperature'] == 0.5
+        assert opts['topP'] == 0.9
+
+    def test_memory_options(self):
+        p = N8nFDLParser()
+        p.parse_memory(
+            'MEMORY buffer AS "Mem" { contextWindowLength: 20, options: { sessionKey: "chat_id" } }'
+        )
+        assert p.nodes[0].parameters['options']['sessionKey'] == 'chat_id'
+
+    def test_tool_http_options(self):
+        p = N8nFDLParser()
+        p.parse_tool(
+            'TOOL http AS "api_call" { url: "https://api.com", '
+            'description: "Call API", options: { timeout: 5000 } }'
+        )
+        assert p.nodes[0].parameters['options']['timeout'] == 5000
+
+    def test_trigger_webhook_options(self):
+        p = N8nFDLParser()
+        p.parse_trigger(
+            'TRIGGER webhook AS "Hook" { path: "/hook", method: POST, '
+            'options: { rawBody: true } }'
+        )
+        assert p.nodes[0].parameters['options']['rawBody'] is True
+
+    def test_no_options_unchanged(self):
+        """Nodes without options: block should still have empty options."""
+        p = N8nFDLParser()
+        p.parse_http('HTTP GET https://api.com AS "Req"')
+        assert p.nodes[0].parameters['options'] == {}
+
+    def test_options_explicit_overrides_shorthand(self):
+        """Explicit options: { temperature: X } overrides shorthand temperature: Y."""
+        p = N8nFDLParser()
+        p.parse_llm(
+            'LLM openai AS "GPT" { model: "gpt-4", temperature: 0.5, '
+            'options: { temperature: 0.9 } }'
+        )
+        assert p.nodes[0].parameters['options']['temperature'] == 0.9
+
+
+# =========================================================================
 # Integration: parse real .nflow files
 # =========================================================================
 
