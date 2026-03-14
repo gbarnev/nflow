@@ -9,6 +9,7 @@ Usage:
 """
 
 import json
+import hashlib
 import uuid
 import re
 import sys
@@ -29,6 +30,13 @@ class NflowError(Exception):
 
 def generate_id():
     return str(uuid.uuid4())
+
+
+def generate_credential_id(name: str) -> str:
+    """Deterministic 16-char alphanumeric ID from credential name, matching n8n's format."""
+    alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
+    digest = hashlib.sha256(name.encode('utf-8')).digest()
+    return ''.join(alphabet[b % len(alphabet)] for b in digest[:16])
 
 
 def generate_condition_id():
@@ -613,6 +621,20 @@ class N8nFDLParser:
         self.positions: dict[str, list[int]] = {}
         self.node_names: set[str] = set()
         self._current_line: int | None = None
+        self._external_creds: dict[str, dict] = {}  # name -> {id, type}
+        self._linked_cred_names: set[str] = set()
+
+    def load_credentials(self, path: str):
+        """Load an existing n8n credentials JSON file for ID reuse by name."""
+        with open(path) as f:
+            data = json.load(f)
+        for entry in data:
+            name = entry.get('name', '')
+            if name:
+                self._external_creds[name] = {
+                    'id': entry['id'],
+                    'type': entry.get('type', ''),
+                }
 
     def _unique_name(self, name: str) -> str:
         """Ensure node names are unique."""
@@ -685,10 +707,16 @@ class N8nFDLParser:
         m = re.match(r'CREDENTIAL\s+@(\w+)\s*=\s*(\w+)\s+' + QUOTED_NAME, line)
         if m:
             alias, cred_type, cred_name = m.group(1), m.group(2), unquote_name(m.group(3))
+            ext = self._external_creds.get(cred_name)
+            if ext:
+                cred_id = ext['id']
+                self._linked_cred_names.add(cred_name)
+            else:
+                cred_id = generate_credential_id(cred_name)
             self.credentials[alias] = {
                 'type': cred_type,
                 'name': cred_name,
-                'id': generate_id()
+                'id': cred_id
             }
 
     def parse_trigger(self, line: str):
@@ -1573,7 +1601,12 @@ class N8nFDLParser:
         self._validate_connections()
         self._auto_layout()
 
+        self._credentials_json = self._build_credentials()
         return self._build_workflow()
+
+    def get_credentials(self) -> list[dict]:
+        """Return the credentials JSON list after parse() has been called."""
+        return getattr(self, '_credentials_json', [])
 
     def _validate_connections(self):
         """Check that all connections reference existing nodes."""
@@ -1654,6 +1687,24 @@ class N8nFDLParser:
             'tags': []
         }
 
+    def _build_credentials(self) -> list[dict]:
+        """Build n8n-compatible credentials JSON for import.
+        Only includes credentials NOT linked from an external file."""
+        now = "2000-01-01T00:00:00.000Z"
+        result = []
+        for cred in self.credentials.values():
+            if cred['name'] in self._linked_cred_names:
+                continue
+            result.append({
+                'id': cred['id'],
+                'name': cred['name'],
+                'type': cred['type'],
+                'data': {},
+                'createdAt': now,
+                'updatedAt': now,
+            })
+        return result
+
 
 # ---------------------------------------------------------------------------
 # CLI
@@ -1675,6 +1726,8 @@ def main():
                     help='check syntax without producing output')
     ap.add_argument('--compact', action='store_true',
                     help='emit compact JSON (no indentation)')
+    ap.add_argument('-c', '--credentials', metavar='FILE',
+                    help='existing n8n credentials JSON to link by name')
     ap.add_argument('-q', '--quiet', action='store_true',
                     help='suppress informational messages')
     ap.add_argument('-V', '--version', action='version',
@@ -1700,6 +1753,8 @@ def main():
 
     try:
         compiler = N8nFDLParser()
+        if args.credentials:
+            compiler.load_credentials(args.credentials)
         workflow = compiler.parse(source)
     except NflowError as e:
         print(f"nflow: {e}", file=sys.stderr)
@@ -1720,6 +1775,17 @@ def main():
             print(f"Wrote {args.output}")
     else:
         print(output)
+
+    credentials = compiler.get_credentials()
+    if credentials and args.output:
+        import os
+        base, ext = os.path.splitext(args.output)
+        creds_path = f"{base}-credentials{ext}"
+        creds_output = json.dumps(credentials, indent=indent, ensure_ascii=False)
+        with open(creds_path, 'w') as f:
+            f.write(creds_output)
+        if not args.quiet:
+            print(f"Wrote {creds_path}")
 
 
 if __name__ == '__main__':

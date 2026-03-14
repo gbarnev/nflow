@@ -21,6 +21,7 @@ from nflow import (
     extract_flags,
     parse_condition_line,
     parse_conditions_block,
+    generate_credential_id,
     N8nFDLParser,
     Node,
     Connection,
@@ -563,6 +564,26 @@ class TestParseWorkflow:
         assert p.active is False
 
 
+class TestGenerateCredentialId:
+    def test_deterministic(self):
+        id1 = generate_credential_id("My API Key")
+        id2 = generate_credential_id("My API Key")
+        assert id1 == id2
+
+    def test_length(self):
+        cid = generate_credential_id("My API Key")
+        assert len(cid) == 16
+
+    def test_alphanumeric(self):
+        cid = generate_credential_id("My API Key")
+        assert cid.isalnum()
+
+    def test_different_names_different_ids(self):
+        id1 = generate_credential_id("Cred A")
+        id2 = generate_credential_id("Cred B")
+        assert id1 != id2
+
+
 class TestParseCredential:
     def test_basic(self):
         p = N8nFDLParser()
@@ -570,6 +591,14 @@ class TestParseCredential:
         assert "myapi" in p.credentials
         assert p.credentials["myapi"]["type"] == "httpHeaderAuth"
         assert p.credentials["myapi"]["name"] == "My API Key"
+
+    def test_deterministic_id(self):
+        p = N8nFDLParser()
+        p.parse_credential('CREDENTIAL @myapi = httpHeaderAuth "My API Key"')
+        expected_id = generate_credential_id("My API Key")
+        assert p.credentials["myapi"]["id"] == expected_id
+        assert len(p.credentials["myapi"]["id"]) == 16
+        assert p.credentials["myapi"]["id"].isalnum()
 
     def test_bearer_auth(self):
         p = N8nFDLParser()
@@ -1153,6 +1182,182 @@ class TestResolveCredential:
 
 
 # =========================================================================
+# Credentials JSON generation
+# =========================================================================
+
+class TestCredentialsJson:
+    def test_get_credentials_after_parse(self):
+        src = '''
+WORKFLOW "Test"
+CREDENTIAL @api = httpHeaderAuth "My API Key"
+CREDENTIAL @bearer = httpBearerAuth "Bearer Token"
+'''
+        p = N8nFDLParser()
+        p.parse(src)
+        creds = p.get_credentials()
+        assert len(creds) == 2
+        names = {c["name"] for c in creds}
+        assert names == {"My API Key", "Bearer Token"}
+
+    def test_credentials_have_required_fields(self):
+        src = '''
+WORKFLOW "Test"
+CREDENTIAL @api = httpHeaderAuth "My API Key"
+'''
+        p = N8nFDLParser()
+        p.parse(src)
+        creds = p.get_credentials()
+        assert len(creds) == 1
+        c = creds[0]
+        assert c["id"] == generate_credential_id("My API Key")
+        assert c["name"] == "My API Key"
+        assert c["type"] == "httpHeaderAuth"
+        assert "data" in c
+        assert "createdAt" in c
+        assert "updatedAt" in c
+
+    def test_credential_ids_match_workflow_nodes(self):
+        src = '''
+WORKFLOW "Test"
+CREDENTIAL @api = httpBearerAuth "Bearer Token"
+HTTP GET https://api.com @api AS "Req"
+'''
+        p = N8nFDLParser()
+        workflow = p.parse(src)
+        creds = p.get_credentials()
+        cred_id = creds[0]["id"]
+        node_cred_id = workflow["nodes"][0]["credentials"]["httpBearerAuth"]["id"]
+        assert cred_id == node_cred_id
+
+    def test_no_credentials_returns_empty(self):
+        src = '''
+WORKFLOW "Test"
+SET "A" { x: 1 }
+'''
+        p = N8nFDLParser()
+        p.parse(src)
+        assert p.get_credentials() == []
+
+    def test_get_credentials_before_parse(self):
+        p = N8nFDLParser()
+        assert p.get_credentials() == []
+
+
+# =========================================================================
+# Credential linking (external credentials file)
+# =========================================================================
+
+class TestCredentialLinking:
+    @pytest.fixture
+    def creds_file(self, tmp_path):
+        data = [
+            {"id": "realId123abc", "name": "My API Key", "type": "httpHeaderAuth",
+             "data": {}},
+            {"id": "realId456def", "name": "Bearer Token", "type": "httpBearerAuth",
+             "data": {}},
+        ]
+        p = tmp_path / "creds.json"
+        p.write_text(json.dumps(data))
+        return str(p)
+
+    def test_linked_credential_uses_external_id(self, creds_file):
+        src = '''
+WORKFLOW "Test"
+CREDENTIAL @api = httpHeaderAuth "My API Key"
+'''
+        p = N8nFDLParser()
+        p.load_credentials(creds_file)
+        p.parse(src)
+        assert p.credentials["api"]["id"] == "realId123abc"
+
+    def test_linked_credential_in_workflow_node(self, creds_file):
+        src = '''
+WORKFLOW "Test"
+CREDENTIAL @api = httpBearerAuth "Bearer Token"
+HTTP GET https://api.com @api AS "Req"
+'''
+        p = N8nFDLParser()
+        p.load_credentials(creds_file)
+        workflow = p.parse(src)
+        node_cred_id = workflow["nodes"][0]["credentials"]["httpBearerAuth"]["id"]
+        assert node_cred_id == "realId456def"
+
+    def test_unlinked_credential_falls_back_to_deterministic(self, creds_file):
+        src = '''
+WORKFLOW "Test"
+CREDENTIAL @other = httpBasicAuth "Unknown Cred"
+'''
+        p = N8nFDLParser()
+        p.load_credentials(creds_file)
+        p.parse(src)
+        assert p.credentials["other"]["id"] == generate_credential_id("Unknown Cred")
+
+    def test_linked_credentials_excluded_from_get_credentials(self, creds_file):
+        src = '''
+WORKFLOW "Test"
+CREDENTIAL @api = httpHeaderAuth "My API Key"
+CREDENTIAL @other = httpBasicAuth "Unknown Cred"
+'''
+        p = N8nFDLParser()
+        p.load_credentials(creds_file)
+        p.parse(src)
+        creds = p.get_credentials()
+        assert len(creds) == 1
+        assert creds[0]["name"] == "Unknown Cred"
+
+    def test_all_linked_returns_empty_get_credentials(self, creds_file):
+        src = '''
+WORKFLOW "Test"
+CREDENTIAL @api = httpHeaderAuth "My API Key"
+CREDENTIAL @bearer = httpBearerAuth "Bearer Token"
+'''
+        p = N8nFDLParser()
+        p.load_credentials(creds_file)
+        p.parse(src)
+        assert p.get_credentials() == []
+
+    def test_no_external_file_works_as_before(self):
+        src = '''
+WORKFLOW "Test"
+CREDENTIAL @api = httpHeaderAuth "My API Key"
+'''
+        p = N8nFDLParser()
+        p.parse(src)
+        assert p.credentials["api"]["id"] == generate_credential_id("My API Key")
+        creds = p.get_credentials()
+        assert len(creds) == 1
+
+
+class TestCredentialLinkingReddit:
+    """Integration test: link reddit.nflow with encrypted_creds.json."""
+
+    def test_reddit_uses_real_n8n_ids(self):
+        with open(EXAMPLES_DIR / "reddit.nflow") as f:
+            src = f.read()
+        p = N8nFDLParser()
+        p.load_credentials(str(EXAMPLES_DIR / "encrypted_creds.json"))
+        workflow = p.parse(src)
+
+        # IDs from encrypted_creds.json
+        expected = {
+            "Reddit OAuth Token": "znoYG75Vc28r5SYV",
+            "Reddit App Credentials": "GDSLU2rBKw3nlHAz",
+        }
+        for node in workflow["nodes"]:
+            if "credentials" in node:
+                for cred_type, cred_ref in node["credentials"].items():
+                    assert cred_ref["id"] == expected[cred_ref["name"]]
+
+    def test_reddit_no_credentials_file_needed(self):
+        with open(EXAMPLES_DIR / "reddit.nflow") as f:
+            src = f.read()
+        p = N8nFDLParser()
+        p.load_credentials(str(EXAMPLES_DIR / "encrypted_creds.json"))
+        p.parse(src)
+        assert p.get_credentials() == []
+
+
+# =========================================================================
 # Full parse (integration)
 # =========================================================================
 
@@ -1486,5 +1691,55 @@ class TestIntegrationAgentFile:
         for name in tool_names:
             assert name in conns, f"Missing connection for tool: {name}"
             assert "ai_tool" in conns[name]
+
+
+class TestIntegrationRedditFile:
+    """Test parsing reddit.nflow with credentials end-to-end."""
+
+    @pytest.fixture
+    def compiler(self):
+        with open(EXAMPLES_DIR / "reddit.nflow") as f:
+            src = f.read()
+        p = N8nFDLParser()
+        p.parse(src)
+        return p
+
+    @pytest.fixture
+    def parsed(self, compiler):
+        with open(EXAMPLES_DIR / "reddit.nflow") as f:
+            src = f.read()
+        return N8nFDLParser().parse(src)
+
+    def test_workflow_name(self, parsed):
+        assert parsed["name"] == "Reddit API"
+
+    def test_node_count(self, parsed):
+        assert len(parsed["nodes"]) == 8
+
+    def test_credentials_generated(self, compiler):
+        creds = compiler.get_credentials()
+        assert len(creds) == 2
+        types = {c["type"] for c in creds}
+        assert types == {"httpBearerAuth", "httpBasicAuth"}
+
+    def test_credential_ids_are_deterministic(self, compiler):
+        creds = compiler.get_credentials()
+        for c in creds:
+            assert c["id"] == generate_credential_id(c["name"])
+            assert len(c["id"]) == 16
+            assert c["id"].isalnum()
+
+    def test_credential_ids_match_nodes(self, compiler):
+        with open(EXAMPLES_DIR / "reddit.nflow") as f:
+            src = f.read()
+        p = N8nFDLParser()
+        workflow = p.parse(src)
+        creds = p.get_credentials()
+        cred_by_name = {c["name"]: c["id"] for c in creds}
+
+        for node in workflow["nodes"]:
+            if "credentials" in node:
+                for cred_type, cred_ref in node["credentials"].items():
+                    assert cred_ref["id"] == cred_by_name[cred_ref["name"]]
 
 

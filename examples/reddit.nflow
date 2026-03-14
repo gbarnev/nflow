@@ -1,0 +1,89 @@
+WORKFLOW "Reddit API"
+
+CREDENTIAL @reddit = httpBearerAuth "Reddit OAuth Token"
+CREDENTIAL @redditBasic = httpBasicAuth "Reddit App Credentials"
+
+// ================================================================
+// Authentication
+// ================================================================
+
+HTTP POST https://www.reddit.com/api/v1/access_token @redditBasic AS "Get Access Token" {
+  body: { grant_type: "client_credentials" },
+  headers: { "User-Agent": "nflow-reddit/1.0" }
+}
+
+// ================================================================
+// Subreddit Operations
+// ================================================================
+
+HTTP GET https://oauth.reddit.com/r/{{ $json.subreddit }}/{{ $json.sort }}.json @reddit AS "Get Subreddit Posts" {
+  query: {
+    limit: {{ $json.limit }},
+    raw_json: 1,
+    after: {{ $json.after }},
+    t: {{ $json.timeRange }}
+  },
+  headers: { "User-Agent": "nflow-reddit/1.0" }
+}
+
+HTTP GET https://oauth.reddit.com/r/{{ $json.subreddit }}/about.json @reddit AS "Get Subreddit Info" {
+  query: { raw_json: 1 },
+  headers: { "User-Agent": "nflow-reddit/1.0" }
+}
+
+HTTP GET https://oauth.reddit.com/subreddits/search.json @reddit AS "Search Subreddits" {
+  query: {
+    q: {{ $json.query }},
+    limit: {{ $json.limit }},
+    raw_json: 1,
+    type: "sr"
+  },
+  headers: { "User-Agent": "nflow-reddit/1.0" }
+}
+
+// ================================================================
+// Post & Comment Operations
+// ================================================================
+
+HTTP GET https://oauth.reddit.com/comments/{{ $json.postId }}.json @reddit AS "Get Post Comments" {
+  query: {
+    limit: {{ $json.limit }},
+    sort: {{ $json.sort }},
+    raw_json: 1,
+    depth: {{ $json.depth }},
+    context: {{ $json.context }}
+  },
+  headers: { "User-Agent": "nflow-reddit/1.0" }
+}
+
+HTTP GET https://oauth.reddit.com/api/morechildren @reddit AS "Get More Children" {
+  query: {
+    api_type: "json",
+    link_id: {{ 't3_' + $json.linkId }},
+    children: {{ $json.childrenIds }},
+    raw_json: 1,
+    sort: {{ $json.sort }}
+  },
+  headers: { "User-Agent": "nflow-reddit/1.0" }
+}
+
+// ================================================================
+// User Operations
+// ================================================================
+
+HTTP GET https://oauth.reddit.com/user/{{ $json.username }}/about.json @reddit AS "Get User Profile" {
+  query: { raw_json: 1 },
+  headers: { "User-Agent": "nflow-reddit/1.0" }
+}
+
+// ================================================================
+// Bulk Lookup
+// ================================================================
+
+HTTP GET https://oauth.reddit.com/api/info @reddit AS "Get Items By IDs" {
+  query: {
+    id: {{ $json.ids }},
+    raw_json: 1
+  },
+  headers: { "User-Agent": "nflow-reddit/1.0" }
+}

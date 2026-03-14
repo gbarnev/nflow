@@ -42,6 +42,42 @@ CREDENTIAL @bearer = httpBearerAuth "Bearer Auth Token"
 CREDENTIAL @gsheets = googleSheetsOAuth2Api "Google Sheets Account"
 ```
 
+When compiling with `-o`, a separate `<name>-credentials.json` file is generated alongside the workflow JSON. Credential IDs are deterministic (derived from the credential name), so re-compiling always produces the same IDs.
+
+**Import order:** import the credentials file first, then the workflow.
+
+### Linking existing n8n credentials
+
+If you already have credentials in n8n, export them and pass the file with `-c`:
+
+```bash
+nflow input.nflow -c credentials.json -o output.json
+```
+
+The compiler matches `CREDENTIAL` declarations by name against the exported file and uses the real n8n IDs. No credentials file is generated for linked credentials — just import the workflow directly.
+
+### Deploying to n8n (Docker)
+
+Use `scripts/n8n-sync.sh` to export/import credentials and workflows. Set `N8N_HOST` for a remote VPS:
+
+```bash
+# Export credentials from remote VPS
+N8N_HOST=root@my-vps.com ./scripts/n8n-sync.sh export-creds credentials.json
+
+# Compile with linked credentials, then deploy
+nflow api.nflow -c credentials.json -o api.json
+N8N_HOST=root@my-vps.com ./scripts/n8n-sync.sh deploy api.json
+
+# Or compile without linking (generates api-credentials.json), deploy both
+nflow api.nflow -o api.json
+N8N_HOST=root@my-vps.com ./scripts/n8n-sync.sh deploy api.json api-credentials.json
+```
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `N8N_HOST` | *(empty = local Docker)* | SSH destination, e.g. `root@my-vps.com` |
+| `N8N_CONTAINER` | `n8n-n8n-1` | Docker container name |
+
 ---
 
 ## 2. Node Types

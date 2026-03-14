@@ -4,6 +4,7 @@ from nflow.compiler import (
     __version__,
     NflowError,
     generate_id,
+    generate_credential_id,
     generate_condition_id,
     tokenize_with_lines,
     tokenize_lines,
@@ -51,5 +52,6 @@ __all__ = [
     "KNOWN_KEYWORDS",
     "OPERATORS",
     "generate_id",
+    "generate_credential_id",
     "generate_condition_id",
 ]
