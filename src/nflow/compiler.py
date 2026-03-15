@@ -818,19 +818,19 @@ class Node:
             'n8n-nodes-base.limit': 1,
             'n8n-nodes-base.splitInBatches': 3,
             'n8n-nodes-base.formTrigger': 2.5,
-            'n8n-nodes-base.googleSheets': 4.5,
+            'n8n-nodes-base.googleSheets': 4.7,
             'n8n-nodes-base.googleSheetsTrigger': 1,
             'n8n-nodes-base.googleDrive': 3,
             'n8n-nodes-base.noOp': 1,
             'n8n-nodes-base.stickyNote': 1,
             'n8n-nodes-base.manualTrigger': 1,
             'n8n-nodes-base.webhook': 2.1,
-            'n8n-nodes-base.scheduleTrigger': 1.2,
-            '@n8n/n8n-nodes-langchain.agent': 2,
-            '@n8n/n8n-nodes-langchain.chatTrigger': 1.1,
+            'n8n-nodes-base.scheduleTrigger': 1.3,
+            '@n8n/n8n-nodes-langchain.agent': 3.1,
+            '@n8n/n8n-nodes-langchain.chatTrigger': 1.4,
             '@n8n/n8n-nodes-langchain.lmChatGoogleGemini': 1,
-            '@n8n/n8n-nodes-langchain.lmChatOpenAi': 1.2,
-            '@n8n/n8n-nodes-langchain.lmChatAnthropic': 1.2,
+            '@n8n/n8n-nodes-langchain.lmChatOpenAi': 1.3,
+            '@n8n/n8n-nodes-langchain.lmChatAnthropic': 1.3,
             '@n8n/n8n-nodes-langchain.memoryBufferWindow': 1.3,
             '@n8n/n8n-nodes-langchain.toolWikipedia': 1,
             '@n8n/n8n-nodes-langchain.toolCode': 1.3,
@@ -1232,24 +1232,49 @@ class N8nFDLParser:
         self.nodes.append(node)
 
     def parse_code(self, line: str):
-        # CODE "Name" `code` or CODE "Name" ```code```
-        m = re.match(r'CODE\s+' + QUOTED_NAME + r'\s*```([\s\S]*?)```', line)
-        if not m:
-            m = re.match(r'CODE\s+' + QUOTED_NAME + r'\s*`([\s\S]*?)`', line)
-        if m:
-            name = unquote_name(m.group(1))
-            code = m.group(2).strip()
-        else:
-            # Fallback: CODE "Name" followed by inline
-            m2 = re.match(r'CODE\s+' + QUOTED_NAME + r'\s*(.*)', line)
-            if m2:
-                name = unquote_name(m2.group(1))
-                code = m2.group(2).strip().strip('`')
-            else:
-                name = 'Code'
-                code = line.replace('CODE', '').strip().strip('`')
+        # CODE "Name" [python] [+each] `code` or ```code```
+        code = ''
+        code_start = len(line)
 
-        params = {'jsCode': code}
+        triple = re.search(r'```([\s\S]*?)```', line)
+        if triple:
+            code = triple.group(1).strip()
+            code_start = triple.start()
+        else:
+            name_m = re.match(r'CODE\s+' + QUOTED_NAME, line)
+            after = line[name_m.end():] if name_m else line[4:]
+            bt = re.search(r'`([^`]*)`', after)
+            if bt:
+                code = bt.group(1).strip()
+                code_start = (name_m.end() if name_m else 4) + bt.start()
+            else:
+                code = after.strip().strip('`')
+
+        prefix = line[:code_start].strip()
+
+        name_m = re.match(r'CODE\s+' + QUOTED_NAME, prefix)
+        if name_m:
+            name = unquote_name(name_m.group(1))
+            middle = prefix[name_m.end():].strip()
+        else:
+            name = 'Code'
+            middle = prefix.replace('CODE', '', 1).strip()
+
+        language = 'javaScript'
+        mode = 'runOnceForAllItems'
+        for token in middle.split():
+            if token.lower() == 'python':
+                language = 'python'
+            elif token == '+each':
+                mode = 'runOnceForEachItem'
+
+        code_key = 'pythonCode' if language == 'python' else 'jsCode'
+        params: dict[str, Any] = {code_key: code}
+        if mode != 'runOnceForAllItems':
+            params['mode'] = mode
+        if language != 'javaScript':
+            params['language'] = language
+
         node = Node(self._unique_name(name), 'n8n-nodes-base.code', params)
         self.nodes.append(node)
 
@@ -1322,8 +1347,8 @@ class N8nFDLParser:
             if p.startswith('@'):
                 cred_alias = p
 
-        op_map = {'read': 'getAll', 'update': 'update', 'append': 'appendOrUpdate',
-                   'getall': 'getAll', 'get': 'getAll'}
+        op_map = {'read': 'read', 'update': 'update', 'append': 'appendOrUpdate',
+                   'getall': 'read', 'get': 'read'}
         n8n_op = op_map.get(operation, operation)
 
         if not name:
@@ -1332,7 +1357,7 @@ class N8nFDLParser:
         block = parse_kv_block(block_str) if block_str else {}
 
         params: dict[str, Any] = {}
-        if n8n_op != 'getAll':
+        if n8n_op != 'read':
             params['operation'] = n8n_op
 
         if block.get('doc'):
@@ -1461,6 +1486,7 @@ class N8nFDLParser:
                 'type': '@n8n/n8n-nodes-langchain.lmChatAnthropic',
                 'cred_type': 'anthropicApi',
                 'model_key': 'model',
+                'model_rl': True,
             },
             'ollama': {
                 'type': '@n8n/n8n-nodes-langchain.lmChatOllama',
@@ -1528,8 +1554,13 @@ class N8nFDLParser:
         n8n_type = mem_type_map.get(mem_type, mem_type_map['buffer'])
 
         params: dict[str, Any] = {}
-        if 'contextWindowLength' in block:
-            params['contextWindowLength'] = int(block['contextWindowLength'])
+        for k, v in block.items():
+            if k == 'options':
+                continue
+            if k == 'contextWindowLength':
+                params[k] = int(v)
+            else:
+                params[k] = v
         self._apply_options(block, params)
 
         node = Node(self._unique_name(name), n8n_type, params)
@@ -1716,7 +1747,9 @@ class N8nFDLParser:
         block = parse_kv_block(block_str) if block_str else {}
         params = {
             'content': block.get('content', ''),
-            'color': block.get('color', 4)
+            'height': block.get('height', 160),
+            'width': block.get('width', 240),
+            'color': block.get('color', 4),
         }
         node = Node(self._unique_name(name), 'n8n-nodes-base.stickyNote', params)
         self.nodes.append(node)

@@ -154,6 +154,21 @@ for (const item of items) {
 return items;
 ```
 
+// Python code
+CODE "Process" python `return [{"json": {"ok": True}} for item in items]`
+
+// Run once per item (instead of once for all items)
+CODE "Per Item" +each `return [{json: {processed: true, ...item.json}}];`
+
+// Python + per-item combined
+CODE "Transform Each" python +each ```
+item = items[0]
+item["json"]["done"] = True
+return [item]
+```
+
+**Options:** `python` keyword selects Python language (default: JavaScript). `+each` flag sets mode to "Run Once for Each Item" (default: "Run Once for All Items").
+
 ### FILTER — Drop non-matching items (single output)
 
 ```nflow
@@ -330,7 +345,10 @@ NOOP "Forward Data"
 
 ```nflow
 NOTE "Reminder" { content: "This section handles tickets", color: 4 }
+NOTE "Large Note" { content: "Architecture overview", height: 400, width: 600 }
 ```
+
+Default dimensions: `height: 160`, `width: 240`. Colors: 1–7.
 
 ---
 
@@ -362,7 +380,16 @@ LLM openai AS "Backup LLM" disabled { model: "gpt-4.1-mini" }
 
 ```nflow
 MEMORY buffer AS "Chat Memory" { contextWindowLength: 30 }
+
+// With custom session key (for multi-session support)
+MEMORY buffer AS "Session Memory" {
+  contextWindowLength: 20,
+  sessionIdType: "customKey",
+  sessionKey: "my_session_id"
+}
 ```
+
+All block parameters are passed through to n8n. See the [Memory Buffer Window](nodes/n8n-nodes-langchain.memoryBufferWindow.md) node reference for all available parameters.
 
 ### TOOL — Agent tools / superpowers
 
@@ -568,7 +595,7 @@ Auto-calculated if omitted.
 | **Data Nodes** | | |
 | `SET` | `SET "Name" { k: v } [+passthrough]` | Assign variables |
 | `HTTP` | `HTTP METHOD url @cred AS "Name" { ... }` | API request |
-| `CODE` | `CODE "Name" \`...\`` | JavaScript transform |
+| `CODE` | `CODE "Name" [python] [+each] \`...\`` | Code transform (JS/Python) |
 | `FILTER` | `FILTER "Name" { conditions: ... }` | Keep matching items |
 | `IF` | `IF "Name" { conditions: ... }` | Branch TRUE/FALSE |
 | `SWITCH` | `SWITCH "Name" { rules: [...] }` | N-way conditional routing |

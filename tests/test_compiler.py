@@ -789,6 +789,46 @@ class TestParseCode:
         p.parse_code("CODE `return 1;`")
         assert p.nodes[0].name == "Code"
 
+    def test_python_language(self):
+        p = N8nFDLParser()
+        p.parse_code('CODE "Script" python `return items`')
+        node = p.nodes[0]
+        assert node.parameters["pythonCode"] == "return items"
+        assert node.parameters["language"] == "python"
+        assert "jsCode" not in node.parameters
+
+    def test_each_mode(self):
+        p = N8nFDLParser()
+        p.parse_code('CODE "Per Item" +each `return [{json: {ok: true}}];`')
+        node = p.nodes[0]
+        assert node.parameters["mode"] == "runOnceForEachItem"
+        assert node.parameters["jsCode"] == "return [{json: {ok: true}}];"
+
+    def test_python_each_combined(self):
+        p = N8nFDLParser()
+        p.parse_code('CODE "Py Each" python +each `return items`')
+        node = p.nodes[0]
+        assert node.parameters["pythonCode"] == "return items"
+        assert node.parameters["language"] == "python"
+        assert node.parameters["mode"] == "runOnceForEachItem"
+
+    def test_default_js_no_extra_params(self):
+        p = N8nFDLParser()
+        p.parse_code('CODE "Basic" `return 1;`')
+        node = p.nodes[0]
+        assert "language" not in node.parameters
+        assert "mode" not in node.parameters
+        assert node.parameters["jsCode"] == "return 1;"
+
+    def test_python_triple_backtick(self):
+        src = 'CODE "Script" python ```\nfor item in items:\n  pass\n```'
+        lines = tokenize_lines(src)
+        p = N8nFDLParser()
+        p.parse_code(lines[0])
+        node = p.nodes[0]
+        assert "for item in items:" in node.parameters["pythonCode"]
+        assert node.parameters["language"] == "python"
+
 
 class TestParseFilter:
     def test_basic(self):
@@ -862,7 +902,7 @@ class TestParseGsheet:
         assert node.type == "n8n-nodes-base.googleSheets"
         assert node.parameters["documentId"]["value"] == "https://docs.google.com/x"
         assert node.parameters["sheetName"]["value"] == "Sheet1"
-        # READ maps to getAll which is the default, so no 'operation' key
+        # READ is the default operation, so no 'operation' key needed
         assert "operation" not in node.parameters
 
     def test_update_with_values(self):
@@ -935,6 +975,9 @@ class TestParseLlm:
         p.parse_llm('LLM anthropic AS "Claude" { model: "claude-sonnet-4-20250514" }')
         node = p.nodes[0]
         assert node.type == "@n8n/n8n-nodes-langchain.lmChatAnthropic"
+        assert node.parameters["model"]["__rl"] is True
+        assert node.parameters["model"]["mode"] == "list"
+        assert node.parameters["model"]["value"] == "claude-sonnet-4-20250514"
 
     def test_disabled(self):
         p = N8nFDLParser()
@@ -966,6 +1009,14 @@ class TestParseMemory:
         # Actually this would make mem_type = "as" which is not in map → defaults to buffer
         node = p.nodes[0]
         assert node.type == "@n8n/n8n-nodes-langchain.memoryBufferWindow"
+
+    def test_session_key_passthrough(self):
+        p = N8nFDLParser()
+        p.parse_memory('MEMORY buffer AS "Mem" { contextWindowLength: 10, sessionIdType: "customKey", sessionKey: "my_session" }')
+        node = p.nodes[0]
+        assert node.parameters["contextWindowLength"] == 10
+        assert node.parameters["sessionIdType"] == "customKey"
+        assert node.parameters["sessionKey"] == "my_session"
 
 
 class TestParseTool:
@@ -1041,6 +1092,15 @@ class TestParseNote:
         assert node.type == "n8n-nodes-base.stickyNote"
         assert node.parameters["content"] == "Check this section"
         assert node.parameters["color"] == 4
+        assert node.parameters["height"] == 160
+        assert node.parameters["width"] == 240
+
+    def test_custom_dimensions(self):
+        p = N8nFDLParser()
+        p.parse_note('NOTE "Wide Note" { content: "text", height: 300, width: 500 }')
+        node = p.nodes[0]
+        assert node.parameters["height"] == 300
+        assert node.parameters["width"] == 500
 
 
 class TestParsePosition:
