@@ -164,8 +164,10 @@ def parse_value(s: str) -> Any:
         return s[1:-1].strip()
 
     # Quoted string
-    if (s.startswith('"') and s.endswith('"')) or (s.startswith("'") and s.endswith("'")):
-        return s[1:-1]
+    if s.startswith('"') and s.endswith('"'):
+        return s[1:-1].replace('\\"', '"')
+    if s.startswith("'") and s.endswith("'"):
+        return s[1:-1].replace("\\'", "'")
 
     # Array [...] 
     if s.startswith('[') and s.endswith(']'):
@@ -324,12 +326,45 @@ def find_unquoted(s: str, ch: str) -> int:
 # ---------------------------------------------------------------------------
 
 def extract_block(line: str) -> tuple[str, str]:
-    """Split a line into the part before `{` and the block content `{...}`."""
+    """Split a line into the part before/after `{...}` and the block content.
+
+    Returns (prefix + suffix, block) where suffix is any text after the
+    matching closing brace (e.g. flags like +passthrough).
+    """
     idx = find_unquoted(line, '{')
     if idx == -1:
         return line, ''
     prefix = line[:idx].strip()
-    block = line[idx:].strip()
+
+    # Find the matching closing brace
+    depth = 0
+    in_quote = None
+    end = len(line)
+    i = idx
+    while i < len(line):
+        c = line[i]
+        if in_quote:
+            if c == in_quote and (i == 0 or line[i - 1] != '\\'):
+                in_quote = None
+            i += 1
+            continue
+        if c in ('"', "'"):
+            in_quote = c
+            i += 1
+            continue
+        if c == '{':
+            depth += 1
+        elif c == '}':
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+        i += 1
+
+    block = line[idx:end].strip()
+    suffix = line[end:].strip()
+    if suffix:
+        prefix = prefix + ' ' + suffix
     return prefix, block
 
 
@@ -2019,7 +2054,7 @@ class N8nFDLParser:
                 if i + 2 < len(parts):
                     target_part = parts[i + 2]
                     self._add_connections_to_targets(source_name, source_output, target_part)
-                    i += 3
+                    i += 2
                     continue
                 i += 2
                 continue
@@ -2028,7 +2063,7 @@ class N8nFDLParser:
                 if i + 2 < len(parts):
                     target_part = parts[i + 2]
                     self._add_connections_to_targets(source_name, source_output, target_part)
-                    i += 3
+                    i += 2
                     continue
                 i += 2
                 continue
@@ -2037,18 +2072,17 @@ class N8nFDLParser:
                 if i + 2 < len(parts):
                     target_part = parts[i + 2]
                     self._add_connections_to_targets(source_name, source_output, target_part)
-                    i += 3
+                    i += 2
                     continue
                 i += 2
                 continue
             elif upper in self.AI_CONNECTION_TYPES:
-                # AI connection: "Source" -> LLM -> "Target"
                 conn_type = self.AI_CONNECTION_TYPES[upper]
                 if i + 2 < len(parts):
                     target_part = parts[i + 2]
                     self._add_connections_to_targets(
                         source_name, 0, target_part, connection_type=conn_type)
-                    i += 3
+                    i += 2
                     continue
                 i += 2
                 continue

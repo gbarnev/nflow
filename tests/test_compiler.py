@@ -1206,6 +1206,52 @@ class TestParseConnectionLine:
         assert c1.target == "B"
         assert c1.source_output == 0
 
+    def test_true_branch_chain_continues(self):
+        p = N8nFDLParser()
+        p.parse_connection_line('"If" -> TRUE -> "A" -> "B" -> "C"')
+        assert len(p.connections) == 3
+        assert p.connections[0].source == "If"
+        assert p.connections[0].target == "A"
+        assert p.connections[0].source_output == 0
+        assert p.connections[1].source == "A"
+        assert p.connections[1].target == "B"
+        assert p.connections[1].source_output == 0
+        assert p.connections[2].source == "B"
+        assert p.connections[2].target == "C"
+
+    def test_false_branch_chain_continues(self):
+        p = N8nFDLParser()
+        p.parse_connection_line('"If" -> FALSE -> "X" -> "Merge":1')
+        assert len(p.connections) == 2
+        assert p.connections[0].source == "If"
+        assert p.connections[0].target == "X"
+        assert p.connections[0].source_output == 1
+        assert p.connections[1].source == "X"
+        assert p.connections[1].target == "Merge"
+        assert p.connections[1].target_input == 1
+        assert p.connections[1].source_output == 0
+
+    def test_err_branch_chain_continues(self):
+        p = N8nFDLParser()
+        p.parse_connection_line('"API" -> ERR -> "Log Error" -> "Notify"')
+        assert len(p.connections) == 2
+        assert p.connections[0].source == "API"
+        assert p.connections[0].target == "Log Error"
+        assert p.connections[0].source_output == 1
+        assert p.connections[1].source == "Log Error"
+        assert p.connections[1].target == "Notify"
+        assert p.connections[1].source_output == 0
+
+    def test_numeric_branch_chain_continues(self):
+        p = N8nFDLParser()
+        p.parse_connection_line('"Switch" -> 2 -> "Case2" -> "Next"')
+        assert len(p.connections) == 2
+        assert p.connections[0].source == "Switch"
+        assert p.connections[0].target == "Case2"
+        assert p.connections[0].source_output == 2
+        assert p.connections[1].source == "Case2"
+        assert p.connections[1].target == "Next"
+
 
 # =========================================================================
 # Unique name deduplication
