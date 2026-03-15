@@ -1227,6 +1227,13 @@ class N8nFDLParser:
 
         self._apply_options(block, params)
 
+        _HTTP_HANDLED_KEYS = frozenset({
+            'body', 'jsonBody', 'query', 'headers', 'options',
+        })
+        for k, v in block.items():
+            if k not in _HTTP_HANDLED_KEYS and k not in params:
+                params[k] = wrap_expr(str(v)) if isinstance(v, str) else v
+
         node = Node(self._unique_name(name), 'n8n-nodes-base.httpRequest', params,
                      credentials=credentials, flags=flags)
         self.nodes.append(node)

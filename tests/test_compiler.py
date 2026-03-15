@@ -1586,6 +1586,39 @@ class TestUnifiedOptions:
         )
         assert p.nodes[0].parameters['options']['allowUnauthorizedCerts'] is True
 
+    def test_http_binary_download(self):
+        p = N8nFDLParser()
+        p.parse_http(
+            'HTTP GET https://example.com/file.pdf AS "Download" { '
+            'options: { response: { response: { responseFormat: "file", outputPropertyName: "myFile" } } } }'
+        )
+        params = p.nodes[0].parameters
+        resp = params['options']['response']['response']
+        assert resp['responseFormat'] == 'file'
+        assert resp['outputPropertyName'] == 'myFile'
+
+    def test_http_binary_upload(self):
+        p = N8nFDLParser()
+        p.parse_http(
+            'HTTP POST https://example.com/upload AS "Upload" { '
+            'sendBody: true, contentType: "binaryData", inputDataFieldName: "myFile" }'
+        )
+        params = p.nodes[0].parameters
+        assert params['sendBody'] is True
+        assert params['contentType'] == 'binaryData'
+        assert params['inputDataFieldName'] == 'myFile'
+
+    def test_http_passthrough_does_not_override_handled_keys(self):
+        p = N8nFDLParser()
+        p.parse_http(
+            'HTTP POST https://api.com AS "Req" { '
+            'jsonBody: {{ JSON.stringify($json) }}, contentType: "binaryData" }'
+        )
+        params = p.nodes[0].parameters
+        assert params['sendBody'] is True
+        assert params['specifyBody'] == 'json'
+        assert params['contentType'] == 'binaryData'
+
     def test_set_options(self):
         p = N8nFDLParser()
         p.parse_set('SET "Config" { apiUrl: "https://x.com", options: { dotNotation: true } }')

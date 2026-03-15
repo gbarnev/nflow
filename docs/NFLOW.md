@@ -137,6 +137,20 @@ HTTP POST https://api.example.com/items @myauth AS "Create" onError:continue {
 HTTP POST https://api.example.com/items @myauth AS "Create" {
   jsonBody: {{ JSON.stringify($json) }}
 }
+
+// Download a file as binary
+HTTP GET https://example.com/report.pdf AS "Download PDF" {
+  options: {
+    response: { response: { responseFormat: "file", outputPropertyName: "data" } }
+  }
+}
+
+// Upload binary data
+HTTP POST https://example.com/upload @myauth AS "Upload File" {
+  sendBody: true,
+  contentType: "binaryData",
+  inputDataFieldName: "data"
+}
 ```
 
 ### CODE — JavaScript
