@@ -548,15 +548,25 @@ _REGISTRY_FILENAMES = ('node-registry.json',)
 
 
 def _find_registry_path() -> str | None:
-    """Search for node-registry.json in common locations."""
+    """Search for node-registry.json in common locations.
+
+    Lookup order:
+    1. Bundled package data via importlib.resources (works for all install modes)
+    2. Current working directory (allows local overrides)
+    """
     import os
-    # 1. Next to this file
-    here = os.path.dirname(os.path.abspath(__file__))
+    from importlib import resources
     for name in _REGISTRY_FILENAMES:
-        for d in [here, os.path.join(here, '..', '..'), os.getcwd()]:
-            path = os.path.join(d, name)
-            if os.path.isfile(path):
-                return os.path.abspath(path)
+        try:
+            ref = resources.files('nflow').joinpath(name)
+            pkg_path = str(ref)
+            if os.path.isfile(pkg_path):
+                return pkg_path
+        except Exception:
+            pass
+        cwd_path = os.path.join(os.getcwd(), name)
+        if os.path.isfile(cwd_path):
+            return os.path.abspath(cwd_path)
     return None
 
 

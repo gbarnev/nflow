@@ -568,7 +568,7 @@ def generate_catalog(registry: dict) -> str:
 
 def main():
     parser = argparse.ArgumentParser(description="Generate nflow node reference docs")
-    parser.add_argument("registry", nargs="?", default="node-registry.json",
+    parser.add_argument("registry", nargs="?", default="src/nflow/node-registry.json",
                         help="Path to node-registry.json")
     parser.add_argument("--catalog", default="docs/NODE-CATALOG.md",
                         help="Output catalog file")

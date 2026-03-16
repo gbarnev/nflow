@@ -259,8 +259,8 @@ def main():
     ap = argparse.ArgumentParser(
         description='Extract n8n node registry for nflow compiler.')
     ap.add_argument('n8n_repo', help='Path to the n8n repository (must be built)')
-    ap.add_argument('-o', '--output', default='node-registry.json',
-                    help='Output file (default: node-registry.json)')
+    ap.add_argument('-o', '--output', default='src/nflow/node-registry.json',
+                    help='Output file (default: src/nflow/node-registry.json)')
     ap.add_argument('--include-credentials', action='store_true',
                     help='Include credential type definitions in output')
     ap.add_argument('--stats', action='store_true',
