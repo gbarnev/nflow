@@ -151,9 +151,11 @@ def parse_value(s: str) -> Any:
     except ValueError:
         pass
 
-    # Expression {{ ... }}
+    # Expression {{ ... }} or ={{ ... }}
     if s.startswith('{{'):
         return wrap_expr(s)
+    if s.startswith('={{'):
+        return s
 
     # Code block with triple backticks
     if s.startswith('```') and s.endswith('```'):
@@ -1045,9 +1047,9 @@ class N8nFDLParser:
                 'options': {}
             }
             if block.get('doc'):
-                params['documentId'] = {'__rl': True, 'value': block['doc'], 'mode': 'url'}
+                params['documentId'] = {'__rl': True, 'value': wrap_expr(str(block['doc'])), 'mode': 'url'}
             if block.get('sheet'):
-                params['sheetName'] = {'__rl': True, 'value': block['sheet'], 'mode': 'name'}
+                params['sheetName'] = {'__rl': True, 'value': wrap_expr(str(block['sheet'])), 'mode': 'name'}
             if block.get('watch'):
                 params['options']['columnsToWatch'] = block['watch'] if isinstance(block['watch'], list) else [block['watch']]
                 params['includeInOutput'] = 'both'
