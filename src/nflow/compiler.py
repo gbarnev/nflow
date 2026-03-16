@@ -794,7 +794,59 @@ def serialize_node_params(params: dict, node_type: str) -> dict:
         serialized = serialize_param(v, prop)
         if serialized is not None:
             result[k] = serialized
+
+    _promote_datamode_to_columns(result, prop_map)
     return result
+
+def _promote_datamode_to_columns(result: dict, prop_map: dict) -> None:
+    """Convert legacy dataMode/fieldsUi params into the resourceMapper columns format.
+
+    n8n v4.5+ nodes (e.g. googleSheets) use a ``columns`` resourceMapper
+    parameter instead of the older ``dataMode`` + ``fieldsUi`` pair.  When the
+    DSL author writes the legacy names via the NODE keyword, this helper folds
+    them into the ``columns`` structure that n8n actually expects.
+    """
+    if 'dataMode' not in result:
+        return
+    columns_prop = prop_map.get('columns')
+    if not columns_prop or columns_prop.get('type') != 'resourceMapper':
+        return
+    if 'columns' in result:
+        return
+
+    data_mode = result.pop('dataMode')
+    fields_ui = result.pop('fieldsUi', None)
+
+    columns: dict[str, Any] = {
+        'mappingMode': data_mode,
+        'value': {},
+        'matchingColumns': [],
+        'schema': [],
+    }
+
+    if data_mode == 'defineBelow' and fields_ui:
+        field_values = (
+            fields_ui.get('fieldValues')
+            or fields_ui.get('values')
+            or []
+        )
+        for entry in field_values:
+            fid = entry.get('fieldId') or entry.get('column') or entry.get('columnName', '')
+            fval = entry.get('fieldValue', '')
+            if isinstance(fval, str):
+                fval = wrap_expr(fval)
+            columns['value'][fid] = fval
+
+        columns['schema'] = [
+            {
+                'id': col_name, 'displayName': col_name,
+                'required': False, 'defaultMatch': False,
+                'display': True, 'type': 'string', 'canBeUsedToMatch': True,
+            }
+            for col_name in columns['value']
+        ]
+
+    result['columns'] = columns
 
 
 # ---------------------------------------------------------------------------

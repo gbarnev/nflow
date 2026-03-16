@@ -1,0 +1,131 @@
+WORKFLOW "Picture crop tool" active
+
+CREDENTIAL @gdrive = googleDriveOAuth2Api "OAuth Test App"
+CREDENTIAL @gsheets = googleSheetsOAuth2Api "Google Sheets"
+
+SET "Config" { batchSize: 10 } +passthrough
+
+TRIGGER form AS "On form submission" {
+  formTitle: "Parse Images",
+  responseMode: lastNode,
+  formFields: { values: [
+    { fieldLabel: "Image URLs (on new line)", fieldType: "textarea", fieldName: "urls", requiredField: true },
+    { fieldLabel: "Save Images Drive Folder URL", requiredField: true }
+  ]}
+}
+
+NODE "googleSheets" @gsheets AS "Create Status Sheet" {
+  resource: "spreadsheet",
+  operation: "create",
+  title: {{ 'Crop Status - ' + new Date().toISOString().slice(0, 10) }},
+  sheetsUi: { sheetValues: [{ title: "Status" }] }
+}
+
+NODE "googleDrive" @gdrive AS "Move Sheet" {
+  resource: "file",
+  operation: "move",
+  fileId: { mode: "id", value: {{ $json.spreadsheetId }} },
+  driveId: "My Drive",
+  folderId: { mode: "url", value: {{ $('On form submission').first().json['Save Images Drive Folder URL'] }} }
+}
+
+SET "Status Columns" { File: "=== STATUS ===", Status: "Processing...", Error: "", Link: "" }
+
+NODE "googleSheets" @gsheets AS "Init Status" {
+  operation: "append",
+  documentId: { mode: "url", value: {{ $('Create Status Sheet').first().json.spreadsheetUrl }} },
+  sheetName: { mode: "name", value: "Status" },
+  dataMode: "autoMapInputData"
+}
+
+CODE "Code in JavaScript" ```
+const urlsRaw = $('On form submission').first().json['urls'] || '';
+
+return urlsRaw
+  .split('\n')
+  .map(u => u.trim())
+  .filter(u => u.length > 0)
+  .map(url => {
+    if (url.includes('/d/')) {
+      const match = url.match(/\/d\/([^/]+)/);
+      return match ? { json: { id: match[1] } } : null;
+    } else if (url.includes('id=')) {
+      const match = url.match(/id=([^&]+)/);
+      return match ? { json: { id: match[1] } } : null;
+    }
+    return null;
+  })
+  .filter(item => item !== null);
+```
+
+LOOP "Batch" { batchSize: {{ $('Config').first().json.batchSize }} }
+
+GDRIVE DOWNLOAD @gdrive AS "Download file" { fileId: {{ $json.id }} }
+
+HTTP POST https://example_image_crop_tool/api/crop AS "Crop & Resize to Webp" onError:continue {
+  sendBody: true,
+  contentType: "multipart-form-data",
+  bodyParameters: { parameters: [
+    { parameterType: "formBinaryData", name: "image", inputDataFieldName: "=data" }
+  ]}
+}
+
+NODE "googleDrive" @gdrive AS "Upload Processed" {
+  name: {{ $('Download file').item.binary.data.fileName.replace(/\.[^.]+$/, '') + '.webp' }},
+  driveId: "My Drive",
+  folderId: { mode: "url", value: {{ $('On form submission').first().json['Save Images Drive Folder URL'] }} }
+}
+
+NODE "googleSheets" @gsheets AS "Log Success" {
+  operation: "append",
+  documentId: { mode: "url", value: {{ $('Create Status Sheet').first().json.spreadsheetUrl }} },
+  sheetName: { mode: "name", value: "Status" },
+  dataMode: "defineBelow",
+  fieldsUi: { fieldValues: [
+    { fieldId: "File", fieldValue: {{ $('Download file').item.binary.data.fileName }} },
+    { fieldId: "Status", fieldValue: "Success" },
+    { fieldId: "Error", fieldValue: "" },
+    { fieldId: "Link", fieldValue: {{ $json.webViewLink || '' }} }
+  ]}
+}
+
+NODE "googleSheets" @gsheets AS "Log Failure" {
+  operation: "append",
+  documentId: { mode: "url", value: {{ $('Create Status Sheet').first().json.spreadsheetUrl }} },
+  sheetName: { mode: "name", value: "Status" },
+  dataMode: "defineBelow",
+  fieldsUi: { fieldValues: [
+    { fieldId: "File", fieldValue: {{ $('Download file').item.binary.data.fileName }} },
+    { fieldId: "Status", fieldValue: "Failed" },
+    { fieldId: "Error", fieldValue: {{ $json.error?.message || $json.message || 'Unknown error' }} },
+    { fieldId: "Link", fieldValue: {{ 'https://drive.google.com/file/d/' + $('Batch').item.json.id + '/view' }} }
+  ]}
+}
+
+CODE "Count Results" ```
+const items = $input.all();
+const success = items.filter(i => i.json.Status === 'Success').length;
+const failed = items.filter(i => i.json.Status === 'Failed').length;
+return [{ json: {
+  File: '=== STATUS ===',
+  Status: (success + failed) + ' processed: ' + success + ' success, ' + failed + ' failed'
+}}];
+```
+
+GSHEET UPDATE @gsheets AS "Update Status" {
+  doc: {{ $('Create Status Sheet').first().json.spreadsheetUrl }},
+  sheet: "Status",
+  match: ["File"],
+  values: {
+    File: "=== STATUS ===",
+    Status: {{ $json.Status }}
+  }
+}
+
+NOOP "Done"
+
+"On form submission" -> "Config" -> "Create Status Sheet" -> "Move Sheet" -> "Status Columns" -> "Init Status" -> "Code in JavaScript" -> "Batch"
+"Batch" -> LOOP -> "Download file" -> "Crop & Resize to Webp"
+"Crop & Resize to Webp" -> OK -> "Upload Processed" -> "Log Success" -> "Batch"
+"Crop & Resize to Webp" -> ERR -> "Log Failure" -> "Batch"
+"Batch" -> DONE -> "Count Results" -> "Update Status" -> "Done"

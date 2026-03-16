@@ -1,0 +1,14 @@
+[
+  {
+    "id": "znoYG75Vc28r5SYV",
+    "name": "Reddit OAuth Token",
+    "type": "httpBearerAuth",
+    "data": {}
+  },
+  {
+    "id": "GDSLU2rBKw3nlHAz",
+    "name": "Reddit App Credentials",
+    "type": "httpBasicAuth",
+    "data": {}
+  }
+]
