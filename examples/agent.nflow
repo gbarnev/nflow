@@ -28,12 +28,12 @@ AGENT "Your First AI Agent" {
 
 LLM gemini @gemini AS "Gemini" {
   model: "models/gemini-2.5-flash",
-  temperature: 0
+  temperature: 1
 }
 
 LLM openai AS "OpenAI" disabled {
   model: "gpt-4.1-mini",
-  temperature: 0
+  temperature: 1
 }
 
 // ================================================================
@@ -58,6 +58,8 @@ TOOL http AS "get_a_joke" {
 TOOL datetime AS "days_from_now" {
   operation: "getTimeBetweenDates",
   description: "Gets the difference (in days) between now and a set date.",
+  startDate: {{ $now }},
+  endDate: {{ $fromAI('End_Date', 'The target date to calculate days until', 'string') }},
   outputFieldName: "now_day_difference"
 }
 

@@ -1738,6 +1738,12 @@ class N8nFDLParser:
         elif tool_type == 'datetime':
             if block.get('operation'):
                 params['operation'] = block['operation']
+            if block.get('startDate'):
+                params['startDate'] = wrap_expr(str(block['startDate']))
+            if block.get('endDate'):
+                params['endDate'] = wrap_expr(str(block['endDate']))
+            if block.get('units'):
+                params['units'] = block['units']
             if block.get('outputFieldName'):
                 params['outputFieldName'] = block['outputFieldName']
             params['options'] = {}
