@@ -1912,7 +1912,8 @@ class N8nFDLParser:
 
         params: dict[str, Any] = {'options': {}}
         if 'batchSize' in block:
-            params['batchSize'] = int(block['batchSize'])
+            val = block['batchSize']
+            params['batchSize'] = val if isinstance(val, str) and val.startswith('=') else int(val)
         skip_keys = {'batchSize', 'options'}
         for k, v in block.items():
             if k not in skip_keys:
