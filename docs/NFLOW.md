@@ -403,7 +403,7 @@ MEMORY buffer AS "Session Memory" {
 }
 ```
 
-All block parameters are passed through to n8n. See the [Memory Buffer Window](nodes/n8n-nodes-langchain.memoryBufferWindow.md) node reference for all available parameters.
+All block parameters are passed through to n8n. See the [Memory Buffer Window](nodes/memoryBufferWindow.md) node reference for all available parameters.
 
 ### TOOL — Agent tools / superpowers
 
