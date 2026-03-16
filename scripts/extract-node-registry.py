@@ -107,6 +107,17 @@ def filter_property(prop: dict) -> dict | None:
         if type_opts:
             result['typeOptions'] = type_opts
 
+    # Preserve displayOptions for resource/operation context
+    do = prop.get('displayOptions', {})
+    show = do.get('show', {})
+    if show:
+        display_show = {}
+        for key in ('resource', 'operation'):
+            if key in show:
+                display_show[key] = show[key]
+        if display_show:
+            result['displayOptions'] = display_show
+
     return result
 
 

@@ -153,15 +153,66 @@ def dedupe_properties(properties: list[dict]) -> list[dict]:
     return result
 
 
-def get_operations(entry: dict) -> tuple[list[str] | None, list[str] | None]:
-    """Return (resource_values, operation_values) or None if not present."""
-    resources = operations = None
+def get_all_operations(entry: dict) -> tuple[list[str] | None, list[str], dict[str | None, list[str]]]:
+    """Merge all resource/operation values across duplicate properties.
+
+    Returns (resources, all_operations_deduped, resource_ops_map).
+    resource_ops_map maps resource_value -> [operations].
+    If operations have no resource constraint, maps None -> [operations].
+    """
+    resources = None
+    all_ops: list[str] = []
+    resource_ops: dict[str | None, list[str]] = {}
+
     for p in entry.get("properties", []):
         if p["name"] == "resource" and p.get("type") == "options" and p.get("values"):
             resources = p["values"]
         elif p["name"] == "operation" and p.get("type") == "options" and p.get("values"):
-            operations = p["values"]
-    return resources, operations
+            do = p.get("displayOptions", {})
+            res_constraint = do.get("resource", [])
+            ops = p["values"]
+            all_ops.extend(ops)
+            if res_constraint:
+                for r in res_constraint:
+                    resource_ops.setdefault(r, []).extend(ops)
+            else:
+                resource_ops.setdefault(None, []).extend(ops)
+
+    seen: set[str] = set()
+    unique_ops = []
+    for op in all_ops:
+        if op not in seen:
+            seen.add(op)
+            unique_ops.append(op)
+
+    return resources, unique_ops, resource_ops
+
+
+def group_props_by_context(properties: list[dict]) -> tuple[dict[tuple, list[dict]], list[dict]]:
+    """Group properties by (resource, operation) from displayOptions.
+
+    Returns (grouped, common) where:
+    - grouped[(resource|None, operation)] = [properties]
+    - common = properties without operation constraints
+    """
+    grouped: dict[tuple, list[dict]] = defaultdict(list)
+    common: list[dict] = []
+
+    for p in properties:
+        if p["name"] in ("resource", "operation"):
+            continue
+        do = p.get("displayOptions", {})
+        op_list = do.get("operation", [])
+        res_list = do.get("resource", [])
+
+        if op_list:
+            for o in op_list:
+                for r in (res_list or [None]):
+                    grouped[(r, o)].append(p)
+        else:
+            common.append(p)
+
+    return dict(grouped), common
 
 
 # ── Param table rendering ────────────────────────────────────────────────────
@@ -235,15 +286,15 @@ def generate_example(full_name: str, entry: dict) -> str:
     if creds:
         cred_str = f" @{make_cred_alias(creds[0]['name'])}"
 
-    resources, operations = get_operations(entry)
+    resources, all_ops, _ = get_all_operations(entry)
     example_params = []
 
     if resources:
         example_params.append(f'  resource: "{resources[0]}"')
-    if operations:
-        op = operations[0]
+    if all_ops:
+        op = all_ops[0]
         for pref in PREFERRED_OPS:
-            if pref in operations:
+            if pref in all_ops:
                 op = pref
                 break
         example_params.append(f'  operation: "{op}"')
@@ -314,28 +365,101 @@ def generate_node_page(full_name: str, entry: dict) -> str:
         lines.append("```")
         lines.append("")
 
-    # Resource / Operation summary
-    resources, operations = get_operations(entry)
-    if resources or operations:
+    # Operations & Parameters
+    props = entry.get("properties", [])
+    resources, all_ops, resource_ops = get_all_operations(entry)
+
+    has_ops = bool(resources or all_ops)
+    grouped, common = group_props_by_context(props) if has_ops else ({}, [])
+
+    if has_ops and grouped:
+        lines.append("## Operations")
+        lines.append("")
+
+        if resources:
+            for res in resources:
+                res_ops = resource_ops.get(res, [])
+                if not res_ops:
+                    continue
+                lines.append(f"### Resource: `{res}`")
+                lines.append("")
+                for op in res_ops:
+                    op_props = grouped.get((res, op), [])
+                    lines.append(f"#### `{op}`")
+                    lines.append("")
+                    if op_props:
+                        lines.extend(render_param_table(op_props))
+                    else:
+                        lines.append("No additional parameters.")
+                    lines.append("")
+        else:
+            ops_list = resource_ops.get(None, all_ops)
+            for op in ops_list:
+                op_props = grouped.get((None, op), [])
+                lines.append(f"### `{op}`")
+                lines.append("")
+                if op_props:
+                    lines.extend(render_param_table(op_props))
+                else:
+                    lines.append("No additional parameters.")
+                lines.append("")
+
+        common_deduped = dedupe_properties(common)
+        if common_deduped:
+            lines.append("## Common Parameters")
+            lines.append("")
+            lines.extend(render_param_table(common_deduped))
+            lines.append("")
+
+        # Children detail for all complex params (deduped by name)
+        all_complex: list[dict] = []
+        seen_names: set[str] = set()
+        for plist in grouped.values():
+            for p in plist:
+                if p["name"] not in seen_names and p.get("type") in ("collection", "fixedCollection"):
+                    seen_names.add(p["name"])
+                    all_complex.append(p)
+        for p in common_deduped:
+            if p["name"] not in seen_names and p.get("type") in ("collection", "fixedCollection"):
+                seen_names.add(p["name"])
+                all_complex.append(p)
+
+        children_lines = render_children_detail(all_complex)
+        if children_lines:
+            lines.append("## Parameter Details")
+            lines.extend(children_lines)
+
+    elif has_ops:
+        # Has operations but no displayOptions data — flat fallback
         lines.append("## Operations")
         lines.append("")
         if resources:
             lines.append(f"**Resources:** {', '.join(f'`{r}`' for r in resources)}")
-        if operations:
-            lines.append(f"**Operations:** {', '.join(f'`{o}`' for o in operations)}")
+        if all_ops:
+            lines.append(f"**Operations:** {', '.join(f'`{o}`' for o in all_ops)}")
         lines.append("")
 
-    # Parameters
-    props = dedupe_properties(entry.get("properties", []))
-    if props:
-        lines.append("## Parameters")
-        lines.append("")
-        lines.extend(render_param_table(props))
-        lines.append("")
+        deduped = dedupe_properties(props)
+        if deduped:
+            lines.append("## Parameters")
+            lines.append("")
+            lines.extend(render_param_table(deduped))
+            lines.append("")
+            children_lines = render_children_detail(deduped)
+            if children_lines:
+                lines.extend(children_lines)
 
-        children_lines = render_children_detail(props)
-        if children_lines:
-            lines.extend(children_lines)
+    else:
+        # No operations — simple parameter table
+        deduped = dedupe_properties(props)
+        if deduped:
+            lines.append("## Parameters")
+            lines.append("")
+            lines.extend(render_param_table(deduped))
+            lines.append("")
+            children_lines = render_children_detail(deduped)
+            if children_lines:
+                lines.extend(children_lines)
 
     # Example
     lines.append("## Example")
@@ -416,17 +540,17 @@ def generate_catalog(registry: dict) -> str:
                 cred_col = "—"
 
             # Operations column
-            resources, operations = get_operations(entry)
+            resources, all_ops, _ = get_all_operations(entry)
             ops_parts = []
             if resources:
                 ops_parts.append(", ".join(resources[:4]))
                 if len(resources) > 4:
                     ops_parts[-1] += "..."
-            if operations:
-                ops = operations[:6]
+            if all_ops:
+                ops = all_ops[:6]
                 ops_parts.append(", ".join(ops))
-                if len(operations) > 6:
-                    ops_parts[-1] += f"... ({len(operations)})"
+                if len(all_ops) > 6:
+                    ops_parts[-1] += f"... ({len(all_ops)})"
             ops_col = " · ".join(ops_parts) if ops_parts else "—"
 
             # Details column
