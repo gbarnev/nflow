@@ -57,7 +57,9 @@ The compiler handles UUIDs, positions, type versions, credential wiring, and the
 Install:
 
 ```bash
-pip install nflow-lang
+git clone https://github.com/gbarnev/nflow.git
+cd nflow
+pip install .
 ```
 
 Create `hello.nflow`:
@@ -74,7 +76,7 @@ HTTP POST https://httpbin.org/post AS "Send" {
 "Start" -> "Greeting" -> "Send"
 ```
 
-Compile and import into n8n:
+Compile:
 
 ```bash
 nflow hello.nflow -o hello.json
@@ -84,6 +86,64 @@ Or run without installing:
 
 ```bash
 python3 -m nflow hello.nflow -o hello.json
+```
+
+Deploy to n8n (self-hosted via Docker):
+
+```bash
+# Copy n8n-sync.sh to your PATH
+cp scripts/n8n-sync.sh /usr/local/bin/n8n-sync
+
+# Import the workflow (local Docker)
+n8n-sync deploy hello.json
+
+# Or deploy to a remote VPS
+N8N_HOST=root@my-vps.com n8n-sync deploy hello.json
+```
+
+## Credentials
+
+Workflows that use external services need credentials. nflow supports two approaches depending on whether you're starting fresh or linking to credentials that already exist in your n8n instance.
+
+### Option 1: Generate and import credentials
+
+When you declare `CREDENTIAL` lines in your `.nflow` file, the compiler automatically generates a separate credentials JSON file alongside the workflow:
+
+```
+CREDENTIAL @pg = postgres "Postgres Production"
+CREDENTIAL @slack = slackOAuth2Api "Slack Bot"
+```
+
+```bash
+nflow api.nflow -o api.json
+# produces api.json (workflow) + api-credentials.json (credentials)
+```
+
+On a self-hosted n8n instance, import both using `n8n-sync`:
+
+```bash
+n8n-sync deploy api.json api-credentials.json
+```
+
+This imports the credentials first, then the workflow. After import, open n8n and fill in the actual secrets (API keys, tokens, passwords) for each credential — nflow generates the credential shells with the correct types and IDs, but not the secrets themselves.
+
+### Option 2: Link existing n8n credentials
+
+If credentials already exist in your n8n instance (e.g. you've configured them through the UI), you can export them and pass the file to the compiler with `-c`. This makes nflow use the real credential IDs from your instance instead of generating new ones:
+
+```bash
+# Export credentials from your n8n instance
+n8n-sync export-creds credentials.json
+
+# Compile with linked credentials — matches by name
+nflow api.nflow -c credentials.json -o api.json
+```
+
+The compiler matches `CREDENTIAL` declarations to exported credentials by name. The resulting workflow JSON will contain the correct credential IDs, so it wires up to your existing credentials on import with no extra steps.
+
+```bash
+# No credentials file needed in deploy — they're already in n8n
+n8n-sync deploy api.json
 ```
 
 ## Examples
