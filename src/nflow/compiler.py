@@ -2250,6 +2250,7 @@ class N8nFDLParser:
                 raise NflowError(str(e), line_num) from e
 
         self._validate_connections()
+        self._fixup_switch_fallback()
         self._auto_layout()
 
         self._credentials_json = self._build_credentials()
@@ -2271,6 +2272,20 @@ class N8nFDLParser:
                 raise NflowError(
                     f"connection references unknown node '{conn.target}'",
                     conn.line_num)
+
+    def _fixup_switch_fallback(self):
+        """Enable fallbackOutput on SWITCH nodes that have connections beyond their rule count."""
+        switch_nodes = {n.name: n for n in self.nodes if n.type == 'n8n-nodes-base.switch'}
+        if not switch_nodes:
+            return
+        for conn in self.connections:
+            node = switch_nodes.get(conn.source)
+            if node is None:
+                continue
+            rules = node.parameters.get('rules', {})
+            rule_count = len(rules.get('values', [])) if isinstance(rules, dict) else 0
+            if conn.source_output >= rule_count:
+                node.parameters.setdefault('options', {})['fallbackOutput'] = 'extra'
 
     def _auto_layout(self):
         """Simple auto-layout: place nodes in a grid based on order, applying
